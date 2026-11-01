@@ -35,6 +35,7 @@ type CommonNode struct {
 	Protocol   string      `json:"protocol"`
 	ListenIP   string      `json:"listen_ip"`
 	ServerPort int         `json:"server_port"`
+	SpeedLimit int         `json:"speed_limit"` // Node speed limit in Mbps, 0 means unlimited
 	Routes     []Route     `json:"routes"`
 	BaseConfig *BaseConfig `json:"base_config"`
 	//vless vmess trojan

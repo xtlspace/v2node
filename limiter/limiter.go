@@ -20,7 +20,7 @@ func Init() {
 
 type Limiter struct {
 	Nodetype      string         // Node type, e.g. "v2ray", "trojan", "shadowsocks"
-	SpeedLimit    int            // Node speed limit in Mbps
+	SpeedLimit    int            // Node speed limit in Mbps, 0 means unlimited
 	UserOnlineIP  *sync.Map      // Key: TagUUID, value: {Key: Ip, value: Uid}
 	OldUserOnline *sync.Map      // Key: Ip, value: Uid
 	UUIDtoUID     map[string]int // Key: UUID, value: Uid
@@ -38,9 +38,10 @@ type UserLimitInfo struct {
 	OverLimit         bool
 }
 
-func AddLimiter(nodetype string, tag string, users []panel.UserInfo, aliveList map[int]int) *Limiter {
+func AddLimiter(nodetype string, tag string, speedLimit int, users []panel.UserInfo, aliveList map[int]int) *Limiter {
 	l := &Limiter{
 		Nodetype:      nodetype,
+		SpeedLimit:    speedLimit,
 		UserOnlineIP:  new(sync.Map),
 		UserLimitInfo: new(sync.Map),
 		SpeedLimiter:  new(sync.Map),
