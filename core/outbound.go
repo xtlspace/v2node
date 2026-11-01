@@ -17,15 +17,21 @@ func buildDefaultOutbound() (*core.OutboundHandlerConfig, error) {
 	//sendthrough := "origin"
 	//outboundDetourConfig.SendThrough = &sendthrough
 
-	proxySetting := &conf.FreedomConfig{
-		DomainStrategy: "UseIPv4v6",
-	}
+	proxySetting := &conf.FreedomConfig{}
 	var setting json.RawMessage
 	setting, err := json.Marshal(proxySetting)
 	if err != nil {
 		return nil, fmt.Errorf("marshal proxy config error: %s", err)
 	}
 	outboundDetourConfig.Settings = &setting
+
+	// freedom.domainStrategy is deprecated; use sockopt.domainStrategy instead.
+	outboundDetourConfig.StreamSetting = &conf.StreamConfig{
+		SocketSettings: &conf.SocketConfig{
+			DomainStrategy: "UseIPv4v6",
+		},
+	}
+
 	return outboundDetourConfig.Build()
 }
 
