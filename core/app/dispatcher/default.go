@@ -235,6 +235,18 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 	return inboundLink, outboundLink, limit, nil
 }
 
+// shouldSniff reports whether content sniffing is needed for the destination.
+// A destination that already carries a domain does not need sniffing.
+func shouldSniff(sniffingRequest session.SniffingRequest, destination net.Destination) bool {
+	if !sniffingRequest.Enabled {
+		return false
+	}
+	if destination.Address != nil && destination.Address.Family().IsDomain() {
+		return false
+	}
+	return true
+}
+
 func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResult, request session.SniffingRequest, destination net.Destination) bool {
 	domain := result.Domain()
 	if domain == "" {
@@ -292,7 +304,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 	if err != nil {
 		return nil, err
 	}
-	if !sniffingRequest.Enabled {
+	if !shouldSniff(sniffingRequest, destination) {
 		go d.routedDispatch(ctx, outbound, destination)
 	} else {
 		go func() {
@@ -413,7 +425,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	}
 
 	sniffingRequest := content.SniffingRequest
-	if !sniffingRequest.Enabled {
+	if !shouldSniff(sniffingRequest, destination) {
 		d.routedDispatch(ctx, outbound, destination)
 	} else {
 		cReader := &cachedReader{
