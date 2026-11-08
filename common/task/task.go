@@ -3,20 +3,40 @@ package task
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 )
 
+const minTaskInterval = time.Second
+
 type Task struct {
 	Name     string
 	Interval time.Duration
+	Jitter   float64 // fraction of Interval, e.g. 0.1 means ±10%; 0 disables jitter
 	Execute  func(context.Context) error
 	Access   sync.RWMutex
 	Running  bool
 	ReloadCh chan struct{}
 	Stop     chan struct{}
+}
+
+func (t *Task) nextInterval() time.Duration {
+	interval := t.Interval
+	if interval <= 0 {
+		return minTaskInterval
+	}
+	if t.Jitter <= 0 {
+		return interval
+	}
+	delta := float64(interval) * t.Jitter
+	next := interval + time.Duration((rand.Float64()*2-1)*delta)
+	if next < minTaskInterval {
+		return minTaskInterval
+	}
+	return next
 }
 
 func (t *Task) Start(first bool) error {
@@ -29,7 +49,7 @@ func (t *Task) Start(first bool) error {
 	t.Stop = make(chan struct{})
 	t.Access.Unlock()
 	go func() {
-		timer := time.NewTimer(t.Interval)
+		timer := time.NewTimer(t.nextInterval())
 		defer timer.Stop()
 		if first {
 			if err := t.ExecuteWithTimeout(); err != nil {
@@ -38,7 +58,7 @@ func (t *Task) Start(first bool) error {
 		}
 
 		for {
-			timer.Reset(t.Interval)
+			timer.Reset(t.nextInterval())
 			select {
 			case <-timer.C:
 				// continue

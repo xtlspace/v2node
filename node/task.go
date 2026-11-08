@@ -11,11 +11,14 @@ import (
 	vCore "github.com/wyx2685/v2node/core"
 )
 
+const taskJitter = 0.1
+
 func (c *Controller) startTasks(node *panel.NodeInfo) {
 	// fetch node info task
 	c.nodeInfoMonitorPeriodic = &task.Task{
 		Name:     "nodeInfoMonitor",
 		Interval: node.PullInterval,
+		Jitter:   taskJitter,
 		Execute:  c.nodeInfoMonitor,
 		ReloadCh: c.server.ReloadCh,
 	}
@@ -23,6 +26,7 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 	c.userReportPeriodic = &task.Task{
 		Name:     "reportUserTrafficTask",
 		Interval: node.PushInterval,
+		Jitter:   taskJitter,
 		Execute:  c.reportUserTrafficTask,
 		ReloadCh: c.server.ReloadCh,
 	}
