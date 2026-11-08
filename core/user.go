@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -86,38 +87,95 @@ func (vc *V2Core) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo
 	return deleted, nil
 }
 
-func (vc *V2Core) GetUserTrafficSlice(tag string, mintraffic int) ([]panel.UserTraffic, error) {
-	trafficSlice := make([]panel.UserTraffic, 0)
-	vc.users.mapLock.RLock()
-	defer vc.users.mapLock.RUnlock()
-	if v, ok := vc.dispatcher.Counter.Load(tag); ok {
-		c := v.(*counter.TrafficCounter)
-		c.Counters.Range(func(key, value interface{}) bool {
-			email := key.(string)
-			traffic := value.(*counter.TrafficStorage)
-			up := traffic.UpCounter.Load()
-			down := traffic.DownCounter.Load()
-			if up+down > int64(mintraffic*1000) {
-				traffic.UpCounter.Store(0)
-				traffic.DownCounter.Store(0)
-				if vc.users.uidMap[email] == 0 {
-					c.Delete(email)
-					return true
-				}
-				trafficSlice = append(trafficSlice, panel.UserTraffic{
-					UID:      vc.users.uidMap[email],
-					Upload:   up,
-					Download: down,
-				})
-			}
-			return true
-		})
-		if len(trafficSlice) == 0 {
-			return nil, nil
-		}
-		return trafficSlice, nil
+// UserTrafficSnapshot is a point-in-time view of a user's accumulated traffic.
+// It is intentionally not filtered or reset so that callers can use the same
+// snapshot for both traffic reporting and online-device filtering.
+type UserTrafficSnapshot struct {
+	Email    string
+	UID      int
+	Upload   int64
+	Download int64
+}
+
+func (vc *V2Core) GetUserTrafficSnapshot(tag string) []UserTrafficSnapshot {
+	if vc.dispatcher == nil {
+		return nil
 	}
-	return nil, nil
+	v, ok := vc.dispatcher.Counter.Load(tag)
+	if !ok {
+		return nil
+	}
+	c := v.(*counter.TrafficCounter)
+
+	vc.users.mapLock.RLock()
+	uidMap := make(map[string]int, len(vc.users.uidMap))
+	for email, uid := range vc.users.uidMap {
+		uidMap[email] = uid
+	}
+	vc.users.mapLock.RUnlock()
+
+	snapshots := make([]UserTrafficSnapshot, 0)
+	c.Counters.Range(func(key, value interface{}) bool {
+		email := key.(string)
+		storage := value.(*counter.TrafficStorage)
+		up := storage.UpCounter.Load()
+		down := storage.DownCounter.Load()
+		if up+down <= 0 {
+			return true
+		}
+		uid, ok := uidMap[email]
+		if !ok || uid == 0 {
+			// The user was deleted; drop the stale counter.
+			c.Delete(email)
+			return true
+		}
+		snapshots = append(snapshots, UserTrafficSnapshot{
+			Email:    email,
+			UID:      uid,
+			Upload:   up,
+			Download: down,
+		})
+		return true
+	})
+	return snapshots
+}
+
+// CommitUserTraffic subtracts traffic that was successfully reported. Traffic
+// that arrived after the snapshot is preserved.
+func (vc *V2Core) CommitUserTraffic(tag string, reported []UserTrafficSnapshot) {
+	if vc.dispatcher == nil || len(reported) == 0 {
+		return
+	}
+	v, ok := vc.dispatcher.Counter.Load(tag)
+	if !ok {
+		return
+	}
+	c := v.(*counter.TrafficCounter)
+	for _, s := range reported {
+		value, ok := c.Counters.Load(s.Email)
+		if !ok {
+			continue
+		}
+		storage := value.(*counter.TrafficStorage)
+		subtractClamped(&storage.UpCounter, s.Upload)
+		subtractClamped(&storage.DownCounter, s.Download)
+	}
+}
+
+func subtractClamped(counter *atomic.Int64, n int64) {
+	if n <= 0 {
+		return
+	}
+	for {
+		current := counter.Load()
+		next := current - n
+		if next < 0 {
+			next = 0
+		}
+		if counter.CompareAndSwap(current, next) {
+			return
+		}
+	}
 }
 
 func (v *V2Core) AddUsers(p *AddUsersParams) (added []panel.UserInfo, err error) {
