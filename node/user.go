@@ -21,16 +21,21 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 	reportTraffic := filterReportTraffic(snapshot, reportmin)
 	if len(reportTraffic) > 0 {
 		err = c.apiClient.ReportUserTraffic(ctx, toPanelTraffic(reportTraffic))
+
+		// Consume the snapshot regardless of the result. This is intentionally
+		// at-most-once: a failed report must not be retried, otherwise a lost
+		// response after the panel processed the request would double-bill.
+		c.server.CommitUserTraffic(c.tag, reportTraffic)
+
 		if err != nil {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
-			}).Info("Report user traffic failed")
+			}).Info("Report user traffic failed, traffic already consumed")
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
 		} else {
-			c.server.CommitUserTraffic(c.tag, reportTraffic)
 			log.WithField("tag", c.tag).Infof("Report %d users traffic", len(reportTraffic))
 		}
 	}
