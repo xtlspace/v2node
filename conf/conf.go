@@ -10,10 +10,29 @@ import (
 const DefaultNodeRetryCount = 1
 const DefaultNodeTimeout = 15
 
+const (
+	DefaultHandshake    uint32 = 4
+	DefaultConnIdle     uint32 = 120
+	DefaultUplinkOnly   uint32 = 2
+	DefaultDownlinkOnly uint32 = 4
+	DefaultBufferSize   int32  = 128
+)
+
 type Conf struct {
 	LogConfig   LogConfig    `mapstructure:"Log"`
+	Policy      PolicyConfig `mapstructure:"Policy"`
 	NodeConfigs []NodeConfig `mapstructure:"Nodes"`
 	PprofPort   int          `mapstructure:"PprofPort"`
+}
+
+// PolicyConfig configures the xray session policy. Timeouts are in seconds.
+// BufferSize is in KB; -1 means unlimited.
+type PolicyConfig struct {
+	Handshake    uint32 `mapstructure:"Handshake"`
+	ConnIdle     uint32 `mapstructure:"ConnIdle"`
+	UplinkOnly   uint32 `mapstructure:"UplinkOnly"`
+	DownlinkOnly uint32 `mapstructure:"DownlinkOnly"`
+	BufferSize   int32  `mapstructure:"BufferSize"`
 }
 
 type LogConfig struct {
@@ -36,6 +55,13 @@ func New() *Conf {
 			Level:  "info",
 			Output: "",
 			Access: "none",
+		},
+		Policy: PolicyConfig{
+			Handshake:    DefaultHandshake,
+			ConnIdle:     DefaultConnIdle,
+			UplinkOnly:   DefaultUplinkOnly,
+			DownlinkOnly: DefaultDownlinkOnly,
+			BufferSize:   DefaultBufferSize,
 		},
 	}
 }
