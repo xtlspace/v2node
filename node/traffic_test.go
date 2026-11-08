@@ -30,30 +30,6 @@ func TestFilterReportTraffic(t *testing.T) {
 	}
 }
 
-func TestBuildAllowedUIDs(t *testing.T) {
-	allowed := buildAllowedUIDs(testSnapshot(), 500)
-	if len(allowed) != 1 {
-		t.Fatalf("len = %d, want 1", len(allowed))
-	}
-	if _, ok := allowed[3]; !ok {
-		t.Fatalf("uid 3 should be allowed: %+v", allowed)
-	}
-	if _, ok := allowed[1]; ok {
-		t.Fatal("uid 1 should not be allowed")
-	}
-
-	// 0 disables filtering entirely.
-	if got := buildAllowedUIDs(testSnapshot(), 0); got != nil {
-		t.Fatalf("expected nil for disabled filtering, got %+v", got)
-	}
-
-	// Equality is included for device filtering.
-	exact := []vCore.UserTrafficSnapshot{{Email: "tag", UID: 1, Upload: 500_000}}
-	if got := buildAllowedUIDs(exact, 500); len(got) != 1 {
-		t.Fatalf("exact threshold should be allowed: %+v", got)
-	}
-}
-
 func TestToPanelTraffic(t *testing.T) {
 	got := toPanelTraffic([]vCore.UserTrafficSnapshot{
 		{Email: "tag", UID: 7, Upload: 10, Download: 20},

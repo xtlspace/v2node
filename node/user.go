@@ -35,24 +35,14 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 		}
 	}
 
-	if onlineDevice, err := c.limiter.GetOnlineDevice(); err != nil {
+	if onlineDevice, err := c.limiter.GetOnlineDevice(devicemin); err != nil {
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
 		}).Info("Get online device failed")
 	} else if len(*onlineDevice) > 0 {
-		allowedUIDs := buildAllowedUIDs(snapshot, devicemin)
-		var result []panel.OnlineUser
-		for _, online := range *onlineDevice {
-			if allowedUIDs != nil {
-				if _, ok := allowedUIDs[online.UID]; !ok {
-					continue
-				}
-			}
-			result = append(result, online)
-		}
 		data := make(map[int][]string)
-		for _, onlineuser := range result {
+		for _, onlineuser := range *onlineDevice {
 			// json structure: { UID1:["ip1","ip2"],UID2:["ip3","ip4"] }
 			data[onlineuser.UID] = append(data[onlineuser.UID], onlineuser.IP)
 		}
@@ -68,7 +58,7 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 				}
 			}
 		}
-		log.WithField("tag", c.tag).Infof("Total %d online users, %d Reported", len(*onlineDevice), len(result))
+		log.WithField("tag", c.tag).Infof("Total %d online users", len(*onlineDevice))
 	}
 
 	return nil
@@ -98,21 +88,6 @@ func toPanelTraffic(snapshot []vCore.UserTrafficSnapshot) []panel.UserTraffic {
 		}
 	}
 	return result
-}
-
-func buildAllowedUIDs(snapshot []vCore.UserTrafficSnapshot, minKB int) map[int]struct{} {
-	if minKB <= 0 {
-		// No device filtering.
-		return nil
-	}
-	threshold := int64(minKB) * 1000
-	allowed := make(map[int]struct{}, len(snapshot))
-	for _, t := range snapshot {
-		if t.Upload+t.Download >= threshold {
-			allowed[t.UID] = struct{}{}
-		}
-	}
-	return allowed
 }
 
 // mergeUserList applies the successfully processed user changes to the current

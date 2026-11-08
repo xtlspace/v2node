@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyx2685/v2node/common/counter"
 	"github.com/xtls/xray-core/common/buf"
 )
 
@@ -27,9 +28,11 @@ func TestCounterReaderForwardsTimeout(t *testing.T) {
 	payload := []byte("hello")
 	src := &counterTestReader{mb: buf.MultiBuffer{buf.FromBytes(payload)}}
 	var counter atomic.Int64
+	var ipCounter atomic.Int64
 	r := &CounterReader{
-		Reader:  src,
-		Counter: &counter,
+		Reader:    src,
+		Counter:   &counter,
+		IPCounter: &ipCounter,
 	}
 
 	timeout := 123 * time.Millisecond
@@ -45,6 +48,25 @@ func TestCounterReaderForwardsTimeout(t *testing.T) {
 	}
 	if got := counter.Load(); got != int64(len(payload)) {
 		t.Fatalf("counter = %d, want %d", got, len(payload))
+	}
+	if got := ipCounter.Load(); got != int64(len(payload)) {
+		t.Fatalf("ip counter = %d, want %d", got, len(payload))
+	}
+}
+
+func TestDualCounterAdd(t *testing.T) {
+	var userValue, ipValue atomic.Int64
+	c := &dualCounter{
+		user: &counter.XrayTrafficCounter{V: &userValue},
+		ip:   &ipValue,
+	}
+	c.Add(10)
+	c.Add(5)
+	if got := userValue.Load(); got != 15 {
+		t.Fatalf("user counter = %d, want 15", got)
+	}
+	if got := ipValue.Load(); got != 15 {
+		t.Fatalf("ip counter = %d, want 15", got)
 	}
 }
 

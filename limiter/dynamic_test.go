@@ -40,7 +40,7 @@ func TestAddLimiterNodeSpeedLimit(t *testing.T) {
 	}
 
 	// A user without its own speed limit should still get a bucket from the node limit.
-	bucket, reject := l.CheckLimit(format.UserTag("node-a", "uuid-1"), "1.2.3.4", true)
+	bucket, _, reject := l.CheckLimit(format.UserTag("node-a", "uuid-1"), "1.2.3.4", true)
 	if reject {
 		t.Fatal("user rejected unexpectedly")
 	}
@@ -54,7 +54,7 @@ func TestAddLimiterWithoutSpeedLimit(t *testing.T) {
 
 	users := []panel.UserInfo{{Id: 2, Uuid: "uuid-2"}}
 	l := AddLimiter("vless", "node-b", 0, users, map[int]int{})
-	bucket, reject := l.CheckLimit(format.UserTag("node-b", "uuid-2"), "1.2.3.4", true)
+	bucket, _, reject := l.CheckLimit(format.UserTag("node-b", "uuid-2"), "1.2.3.4", true)
 	if reject {
 		t.Fatal("user rejected unexpectedly")
 	}

@@ -2,8 +2,10 @@ package limiter
 
 import (
 	"errors"
+	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	panel "github.com/wyx2685/v2node/api/v2board"
@@ -21,8 +23,8 @@ func Init() {
 type Limiter struct {
 	Nodetype      string      // Node type, e.g. "vless", "shadowsocks"
 	SpeedLimit    int         // Node speed limit in Mbps, 0 means unlimited
-	UserOnlineIP  *sync.Map   // Key: TagUUID, value: {Key: Ip, value: Uid}
-	OldUserOnline *sync.Map   // Key: Ip, value: Uid
+	UserOnlineIP  *sync.Map   // Key: TagUUID, value: *sync.Map {Key: normalized IP, value: *IPState}
+	OldUserOnline *sync.Map   // Key: normalized IP, value: Uid
 	UserLimitInfo *sync.Map   // Key: TagUUID value: UserLimitInfo
 	SpeedLimiter  *sync.Map   // key: TagUUID, value: *DynamicBucket
 	AliveList     map[int]int // Key: Uid, value: alive_ip
@@ -35,6 +37,14 @@ type UserLimitInfo struct {
 	DynamicSpeedLimit int
 	ExpireTime        int64
 	OverLimit         bool
+}
+
+// IPState tracks per-device traffic for the current reporting interval.
+// IPv6 addresses are aggregated by /64 before being stored here.
+type IPState struct {
+	UID  int
+	Up   atomic.Int64
+	Down atomic.Int64
 }
 
 func AddLimiter(nodetype string, tag string, speedLimit int, users []panel.UserInfo, aliveList map[int]int) *Limiter {
@@ -135,9 +145,9 @@ func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire ti
 	return nil
 }
 
-func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPsource bool) (DynamicBucket *rate.DynamicBucket, Reject bool) {
-	// check if ipv4 mapped ipv6
-	ip = strings.TrimPrefix(ip, "::ffff:")
+func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPsource bool) (DynamicBucket *rate.DynamicBucket, ipState *IPState, Reject bool) {
+	// Normalize IPv4-mapped IPv6 and aggregate IPv6 by /64.
+	ip = normalizeDeviceIP(ip)
 
 	// check and gen speed limit Bucket
 	nodeLimit := l.SpeedLimit
@@ -160,79 +170,107 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPsource bool) (Dynam
 			userLimit = determineSpeedLimit(u.SpeedLimit, u.DynamicSpeedLimit)
 		}
 	} else {
-		return nil, true
+		return nil, nil, true
 	}
 	if noUDPsource || l.Nodetype == "hysteria2" || l.Nodetype == "tuic" {
 		// Store online user for device limit
 		aliveIp := l.AliveList[uid]
-		// If any device is online
-		if v, loaded := l.UserOnlineIP.Load(taguuid); loaded {
-			// If this is a new ip
-			if l.addOnlineIP(v.(*sync.Map), ip, uid, deviceLimit, aliveIp) {
-				return nil, true
-			}
-		} else {
-			newipMap := new(sync.Map)
-			newipMap.Store(ip, uid)
-			if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, newipMap); loaded {
-				if l.addOnlineIP(v.(*sync.Map), ip, uid, deviceLimit, aliveIp) {
-					return nil, true
-				}
-			} else if v, ok := l.OldUserOnline.Load(ip); ok {
-				if v.(int) == uid {
-					l.OldUserOnline.Delete(ip)
-				}
-			} else if deviceLimit > 0 && deviceLimit <= aliveIp {
-				l.UserOnlineIP.Delete(taguuid)
-				return nil, true
-			}
+		var reject bool
+		ipState, reject = l.trackOnlineIP(taguuid, ip, uid, deviceLimit, aliveIp)
+		if reject {
+			return nil, nil, true
 		}
 	}
 
 	limit := int64(determineSpeedLimit(nodeLimit, userLimit)) * 1000000 / 8 // If you need the Speed limit
 	if limit > 0 {
 		if v, ok := l.SpeedLimiter.Load(taguuid); ok {
-			return v.(*rate.DynamicBucket), false
-		} else {
-			d := rate.NewDynamicBucket(limit)
-			l.SpeedLimiter.Store(taguuid, d)
-			return d, false
+			return v.(*rate.DynamicBucket), ipState, false
 		}
-	} else {
-		return nil, false
+		d := rate.NewDynamicBucket(limit)
+		l.SpeedLimiter.Store(taguuid, d)
+		return d, ipState, false
 	}
+	return nil, ipState, false
+}
+
+// normalizeDeviceIP maps IPv4-mapped addresses to IPv4 and aggregates IPv6
+// addresses by their /64 prefix so that one IPv6 /64 counts as one device.
+func normalizeDeviceIP(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return strings.TrimPrefix(ip, "::ffff:")
+	}
+	addr = addr.Unmap()
+	if addr.Zone() != "" {
+		addr = addr.WithZone("")
+	}
+	if addr.Is4() {
+		return addr.String()
+	}
+	prefix, err := addr.Prefix(64)
+	if err != nil {
+		return addr.String()
+	}
+	return prefix.Addr().String()
+}
+
+func (l *Limiter) trackOnlineIP(taguuid, ip string, uid, deviceLimit, aliveIp int) (*IPState, bool) {
+	if v, loaded := l.UserOnlineIP.Load(taguuid); loaded {
+		return l.addOnlineIP(v.(*sync.Map), ip, uid, deviceLimit, aliveIp)
+	}
+	ipMap := new(sync.Map)
+	state := &IPState{UID: uid}
+	ipMap.Store(ip, state)
+	if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, ipMap); loaded {
+		return l.addOnlineIP(v.(*sync.Map), ip, uid, deviceLimit, aliveIp)
+	}
+	if v, ok := l.OldUserOnline.Load(ip); ok {
+		if v.(int) == uid {
+			l.OldUserOnline.Delete(ip)
+		}
+	} else if deviceLimit > 0 && deviceLimit <= aliveIp {
+		l.UserOnlineIP.Delete(taguuid)
+		return nil, true
+	}
+	return state, false
 }
 
 // addOnlineIP records a new IP for the user and reports whether the connection
 // should be rejected by the device limit.
-func (l *Limiter) addOnlineIP(ipMap *sync.Map, ip string, uid, deviceLimit, aliveIp int) bool {
-	if _, loaded := ipMap.LoadOrStore(ip, uid); loaded {
-		return false
+func (l *Limiter) addOnlineIP(ipMap *sync.Map, ip string, uid, deviceLimit, aliveIp int) (*IPState, bool) {
+	state := &IPState{UID: uid}
+	if v, loaded := ipMap.LoadOrStore(ip, state); loaded {
+		return v.(*IPState), false
 	}
 	if v, loaded := l.OldUserOnline.Load(ip); loaded {
 		if v.(int) == uid {
 			l.OldUserOnline.Delete(ip)
 		}
-		return false
+		return state, false
 	}
 	if deviceLimit > 0 && deviceLimit <= aliveIp {
 		ipMap.Delete(ip)
-		return true
+		return nil, true
 	}
-	return false
+	return state, false
 }
 
-func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
+func (l *Limiter) GetOnlineDevice(minTrafficKB int) (*[]panel.OnlineUser, error) {
 	var onlineUser []panel.OnlineUser
+	minBytes := int64(minTrafficKB) * 1000
 	l.OldUserOnline = new(sync.Map)
 	l.UserOnlineIP.Range(func(key, value interface{}) bool {
 		taguuid := key.(string)
 		ipMap := value.(*sync.Map)
 		ipMap.Range(func(key, value interface{}) bool {
-			uid := value.(int)
 			ip := key.(string)
-			l.OldUserOnline.Store(ip, uid)
-			onlineUser = append(onlineUser, panel.OnlineUser{UID: uid, IP: ip})
+			state := value.(*IPState)
+			l.OldUserOnline.Store(ip, state.UID)
+			if minTrafficKB > 0 && state.Up.Load()+state.Down.Load() < minBytes {
+				return true
+			}
+			onlineUser = append(onlineUser, panel.OnlineUser{UID: state.UID, IP: ip})
 			return true
 		})
 		l.UserOnlineIP.Delete(taguuid) // Reset online device
