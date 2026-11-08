@@ -413,9 +413,16 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 
 		ts := t.GetCounter(user.Email)
 		downcounter := &counter.XrayTrafficCounter{V: &ts.DownCounter}
-		outbound.Reader = &CounterReader{
+		counterReader := &CounterReader{
 			Reader:  &buf.TimeoutWrapperReader{Reader: outbound.Reader},
 			Counter: &ts.UpCounter,
+		}
+		if w != nil {
+			// Share the same bucket as the downlink so that both directions
+			// consume one combined speed limit.
+			outbound.Reader = rate.NewRateLimitReader(counterReader, w)
+		} else {
+			outbound.Reader = counterReader
 		}
 		lm.AddLink(managedWriter, outbound.Reader)
 		outbound.Writer = &dispatcher.SizeStatWriter{

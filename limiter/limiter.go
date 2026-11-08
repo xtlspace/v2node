@@ -19,14 +19,13 @@ func Init() {
 }
 
 type Limiter struct {
-	Nodetype      string         // Node type, e.g. "vless", "shadowsocks"
-	SpeedLimit    int            // Node speed limit in Mbps, 0 means unlimited
-	UserOnlineIP  *sync.Map      // Key: TagUUID, value: {Key: Ip, value: Uid}
-	OldUserOnline *sync.Map      // Key: Ip, value: Uid
-	UUIDtoUID     map[string]int // Key: UUID, value: Uid
-	UserLimitInfo *sync.Map      // Key: TagUUID value: UserLimitInfo
-	SpeedLimiter  *sync.Map      // key: TagUUID, value: *DynamicBucket
-	AliveList     map[int]int    // Key: Uid, value: alive_ip
+	Nodetype      string      // Node type, e.g. "vless", "shadowsocks"
+	SpeedLimit    int         // Node speed limit in Mbps, 0 means unlimited
+	UserOnlineIP  *sync.Map   // Key: TagUUID, value: {Key: Ip, value: Uid}
+	OldUserOnline *sync.Map   // Key: Ip, value: Uid
+	UserLimitInfo *sync.Map   // Key: TagUUID value: UserLimitInfo
+	SpeedLimiter  *sync.Map   // key: TagUUID, value: *DynamicBucket
+	AliveList     map[int]int // Key: Uid, value: alive_ip
 }
 
 type UserLimitInfo struct {
@@ -48,9 +47,7 @@ func AddLimiter(nodetype string, tag string, speedLimit int, users []panel.UserI
 		AliveList:     aliveList,
 		OldUserOnline: new(sync.Map),
 	}
-	uuidmap := make(map[string]int)
 	for i := range users {
-		uuidmap[users[i].Uuid] = users[i].Id
 		userLimit := &UserLimitInfo{}
 		userLimit.UID = users[i].Id
 		if users[i].SpeedLimit != 0 {
@@ -62,7 +59,6 @@ func AddLimiter(nodetype string, tag string, speedLimit int, users []panel.UserI
 		userLimit.OverLimit = false
 		l.UserLimitInfo.Store(format.UserTag(tag, users[i].Uuid), userLimit)
 	}
-	l.UUIDtoUID = uuidmap
 	limitLock.Lock()
 	limiter[tag] = l
 	limitLock.Unlock()
@@ -90,7 +86,6 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		l.UserLimitInfo.Delete(format.UserTag(tag, deleted[i].Uuid))
 		l.UserOnlineIP.Delete(format.UserTag(tag, deleted[i].Uuid))
 		l.SpeedLimiter.Delete(format.UserTag(tag, deleted[i].Uuid))
-		delete(l.UUIDtoUID, deleted[i].Uuid)
 		delete(l.AliveList, deleted[i].Id)
 	}
 	for i := range modified {
@@ -126,7 +121,6 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		}
 		userLimit.OverLimit = false
 		l.UserLimitInfo.Store(format.UserTag(tag, added[i].Uuid), userLimit)
-		l.UUIDtoUID[added[i].Uuid] = added[i].Id
 	}
 }
 
@@ -170,35 +164,27 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPsource bool) (Dynam
 	}
 	if noUDPsource || l.Nodetype == "hysteria2" || l.Nodetype == "tuic" {
 		// Store online user for device limit
-		newipMap := new(sync.Map)
-		newipMap.Store(ip, uid)
 		aliveIp := l.AliveList[uid]
 		// If any device is online
-		if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, newipMap); loaded {
-			oldipMap := v.(*sync.Map)
+		if v, loaded := l.UserOnlineIP.Load(taguuid); loaded {
 			// If this is a new ip
-			if _, loaded := oldipMap.LoadOrStore(ip, uid); !loaded {
-				if v, loaded := l.OldUserOnline.Load(ip); loaded {
-					if v.(int) == uid {
-						l.OldUserOnline.Delete(ip)
-					}
-				} else if deviceLimit > 0 {
-					if deviceLimit <= aliveIp {
-						oldipMap.Delete(ip)
-						return nil, true
-					}
-				}
-			}
-		} else if v, ok := l.OldUserOnline.Load(ip); ok {
-			if v.(int) == uid {
-				l.OldUserOnline.Delete(ip)
+			if l.addOnlineIP(v.(*sync.Map), ip, uid, deviceLimit, aliveIp) {
+				return nil, true
 			}
 		} else {
-			if deviceLimit > 0 {
-				if deviceLimit <= aliveIp {
-					l.UserOnlineIP.Delete(taguuid)
+			newipMap := new(sync.Map)
+			newipMap.Store(ip, uid)
+			if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, newipMap); loaded {
+				if l.addOnlineIP(v.(*sync.Map), ip, uid, deviceLimit, aliveIp) {
 					return nil, true
 				}
+			} else if v, ok := l.OldUserOnline.Load(ip); ok {
+				if v.(int) == uid {
+					l.OldUserOnline.Delete(ip)
+				}
+			} else if deviceLimit > 0 && deviceLimit <= aliveIp {
+				l.UserOnlineIP.Delete(taguuid)
+				return nil, true
 			}
 		}
 	}
@@ -215,6 +201,25 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPsource bool) (Dynam
 	} else {
 		return nil, false
 	}
+}
+
+// addOnlineIP records a new IP for the user and reports whether the connection
+// should be rejected by the device limit.
+func (l *Limiter) addOnlineIP(ipMap *sync.Map, ip string, uid, deviceLimit, aliveIp int) bool {
+	if _, loaded := ipMap.LoadOrStore(ip, uid); loaded {
+		return false
+	}
+	if v, loaded := l.OldUserOnline.Load(ip); loaded {
+		if v.(int) == uid {
+			l.OldUserOnline.Delete(ip)
+		}
+		return false
+	}
+	if deviceLimit > 0 && deviceLimit <= aliveIp {
+		ipMap.Delete(ip)
+		return true
+	}
+	return false
 }
 
 func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
