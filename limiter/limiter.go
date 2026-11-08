@@ -19,7 +19,7 @@ func Init() {
 }
 
 type Limiter struct {
-	Nodetype      string         // Node type, e.g. "v2ray", "trojan", "shadowsocks"
+	Nodetype      string         // Node type, e.g. "vless", "shadowsocks"
 	SpeedLimit    int            // Node speed limit in Mbps, 0 means unlimited
 	UserOnlineIP  *sync.Map      // Key: TagUUID, value: {Key: Ip, value: Uid}
 	OldUserOnline *sync.Map      // Key: Ip, value: Uid

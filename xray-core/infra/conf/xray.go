@@ -33,8 +33,6 @@ var (
 		"mixed":         func() interface{} { return new(SocksServerConfig) },
 		"socks":         func() interface{} { return new(SocksServerConfig) },
 		"vless":         func() interface{} { return new(VLessInboundConfig) },
-		"vmess":         func() interface{} { return new(VMessInboundConfig) },
-		"trojan":        func() interface{} { return new(TrojanServerConfig) },
 		"wireguard":     func() interface{} { return &WireGuardConfig{IsClient: false} },
 		"tuic":          func() interface{} { return new(TuicServerConfig) },
 		"anytls":        func() interface{} { return new(AnyTLSServerConfig) },
@@ -53,8 +51,6 @@ var (
 		"shadowsocks": func() interface{} { return new(ShadowsocksClientConfig) },
 		"socks":       func() interface{} { return new(SocksClientConfig) },
 		"vless":       func() interface{} { return new(VLessOutboundConfig) },
-		"vmess":       func() interface{} { return new(VMessOutboundConfig) },
-		"trojan":      func() interface{} { return new(TrojanClientConfig) },
 		"hysteria":    func() interface{} { return new(HysteriaClientConfig) },
 		"masque":      func() interface{} { return new(MasqueClientConfig) },
 		"dns":         func() interface{} { return new(DNSOutboundConfig) },
@@ -262,12 +258,6 @@ func validateOutboundTransportSecurity(rawConfig interface{}, senderSettings *pr
 		}
 		if requiresTransportSecurity(vlessCfg.Address) {
 			return errors.New("vless without TLS or other encryption is prohibited unless the server address is a private IP or domain")
-		}
-	}
-
-	if tjCfg, ok := rawConfig.(*TrojanClientConfig); ok {
-		if requiresTransportSecurity(tjCfg.Servers[0].Address) {
-			return errors.New("trojan without TLS is prohibited unless the server address is a private IP or domain")
 		}
 	}
 

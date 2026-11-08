@@ -45,13 +45,10 @@ import (
 	_ "github.com/xtls/xray-core/proxy/shadowsocks"
 	_ "github.com/xtls/xray-core/proxy/shadowsocks_2022"
 	_ "github.com/xtls/xray-core/proxy/socks"
-	_ "github.com/xtls/xray-core/proxy/trojan"
 	_ "github.com/xtls/xray-core/proxy/tuic"
 
 	_ "github.com/xtls/xray-core/proxy/vless/inbound"
 	_ "github.com/xtls/xray-core/proxy/vless/outbound"
-	_ "github.com/xtls/xray-core/proxy/vmess/inbound"
-	_ "github.com/xtls/xray-core/proxy/vmess/outbound"
 
 	//_ "github.com/xtls/xray-core/proxy/wireguard"
 

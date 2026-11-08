@@ -13,13 +13,11 @@ import (
 	"github.com/wyx2685/v2node/core/app/dispatcher"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
-	"github.com/xtls/xray-core/infra/conf"
 	"github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/proxy/anytls"
 	hyaccount "github.com/xtls/xray-core/proxy/hysteria/account"
 	"github.com/xtls/xray-core/proxy/shadowsocks"
 	"github.com/xtls/xray-core/proxy/shadowsocks_2022"
-	"github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/tuic"
 	"github.com/xtls/xray-core/proxy/vless"
 )
@@ -114,12 +112,8 @@ func (v *V2Core) AddUsers(p *AddUsersParams) (added int, err error) {
 	}
 	var users []*protocol.User
 	switch p.NodeInfo.Type {
-	case "vmess":
-		users = buildVmessUsers(p.Tag, p.Users)
 	case "vless":
 		users = buildVlessUsers(p.Tag, p.Users, p.Common.Flow)
-	case "trojan":
-		users = buildTrojanUsers(p.Tag, p.Users)
 	case "shadowsocks":
 		users = buildSSUsers(p.Tag,
 			p.Users,
@@ -153,26 +147,6 @@ func (v *V2Core) AddUsers(p *AddUsersParams) (added int, err error) {
 	return len(users), nil
 }
 
-func buildVmessUsers(tag string, userInfo []panel.UserInfo) (users []*protocol.User) {
-	users = make([]*protocol.User, len(userInfo))
-	for i, user := range userInfo {
-		users[i] = buildVmessUser(tag, &user)
-	}
-	return users
-}
-
-func buildVmessUser(tag string, userInfo *panel.UserInfo) (user *protocol.User) {
-	vmessAccount := &conf.VMessAccount{
-		ID:       userInfo.Uuid,
-		Security: "auto",
-	}
-	return &protocol.User{
-		Level:   0,
-		Email:   format.UserTag(tag, userInfo.Uuid),
-		Account: serial.ToTypedMessage(vmessAccount.Build()),
-	}
-}
-
 func buildVlessUsers(tag string, userInfo []panel.UserInfo, flow string) (users []*protocol.User) {
 	users = make([]*protocol.User, len(userInfo))
 	for i := range userInfo {
@@ -190,25 +164,6 @@ func buildVlessUser(tag string, userInfo *panel.UserInfo, flow string) (user *pr
 		Level:   0,
 		Email:   format.UserTag(tag, userInfo.Uuid),
 		Account: serial.ToTypedMessage(vlessAccount),
-	}
-}
-
-func buildTrojanUsers(tag string, userInfo []panel.UserInfo) (users []*protocol.User) {
-	users = make([]*protocol.User, len(userInfo))
-	for i := range userInfo {
-		users[i] = buildTrojanUser(tag, &(userInfo)[i])
-	}
-	return users
-}
-
-func buildTrojanUser(tag string, userInfo *panel.UserInfo) (user *protocol.User) {
-	trojanAccount := &trojan.Account{
-		Password: userInfo.Uuid,
-	}
-	return &protocol.User{
-		Level:   0,
-		Email:   format.UserTag(tag, userInfo.Uuid),
-		Account: serial.ToTypedMessage(trojanAccount),
 	}
 }
 

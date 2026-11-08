@@ -38,7 +38,7 @@ type CommonNode struct {
 	SpeedLimit int         `json:"speed_limit"` // Node speed limit in Mbps, 0 means unlimited
 	Routes     []Route     `json:"routes"`
 	BaseConfig *BaseConfig `json:"base_config"`
-	//vless vmess trojan
+	//vless
 	Tls                  int         `json:"tls"`
 	TlsSettings          TlsSettings `json:"tls_settings"`
 	CertInfo             *CertInfo
@@ -164,7 +164,7 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 		return nil, fmt.Errorf("decode node params error: %s", err)
 	}
 	switch cm.Protocol {
-	case "vmess", "trojan", "hysteria2", "tuic", "anytls", "vless":
+	case "hysteria2", "tuic", "anytls", "vless":
 		node.Type = cm.Protocol
 		node.Security = cm.Tls
 	case "shadowsocks":

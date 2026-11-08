@@ -54,10 +54,6 @@ func buildInbound(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerCon
 	switch nodeInfo.Type {
 	case "vless":
 		err = buildVLess(nodeInfo, in)
-	case "vmess":
-		err = buildVMess(nodeInfo, in)
-	case "trojan":
-		err = buildTrojan(nodeInfo, in)
 	case "shadowsocks":
 		err = buildShadowsocks(nodeInfo, in)
 	case "hysteria2":
@@ -250,92 +246,6 @@ func buildVLess(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourConfig)
 		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.SplitHTTPSettings)
 		if err != nil {
 			return fmt.Errorf("unmarshal xhttp settings error: %s", err)
-		}
-	default:
-		return errors.New("the network type is not vail")
-	}
-	return nil
-}
-
-func buildVMess(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourConfig) error {
-	v := nodeInfo.Common
-	// Set vmess
-	inbound.Protocol = "vmess"
-	var err error
-	s, err := json.Marshal(&coreConf.VMessInboundConfig{})
-	if err != nil {
-		return fmt.Errorf("marshal vmess settings error: %s", err)
-	}
-	inbound.Settings = (*json.RawMessage)(&s)
-	if len(v.NetworkSettings) == 0 {
-		return nil
-	}
-	t := coreConf.TransportProtocol(v.Network)
-	inbound.StreamSetting = &coreConf.StreamConfig{Network: &t}
-	switch v.Network {
-	case "tcp":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.TCPSettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal tcp settings error: %s", err)
-		}
-	case "ws":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.WSSettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal ws settings error: %s", err)
-		}
-	case "grpc":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.GRPCSettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal grpc settings error: %s", err)
-		}
-	case "httpupgrade":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.HTTPUPGRADESettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal httpupgrade settings error: %s", err)
-		}
-	case "splithttp", "xhttp":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.SplitHTTPSettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal xhttp settings error: %s", err)
-		}
-	default:
-		return errors.New("the network type is not vail")
-	}
-	return nil
-}
-
-func buildTrojan(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourConfig) error {
-	inbound.Protocol = "trojan"
-	v := nodeInfo.Common
-	s, err := json.Marshal(&coreConf.TrojanServerConfig{})
-	if err != nil {
-		return fmt.Errorf("marshal trojan settings error: %s", err)
-	}
-	inbound.Settings = (*json.RawMessage)(&s)
-	network := v.Network
-	if network == "" {
-		network = "tcp"
-	}
-	t := coreConf.TransportProtocol(network)
-	inbound.StreamSetting = &coreConf.StreamConfig{Network: &t}
-	if len(v.NetworkSettings) == 0 {
-		return nil
-	}
-	switch network {
-	case "tcp":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.TCPSettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal tcp settings error: %s", err)
-		}
-	case "ws":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.WSSettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal ws settings error: %s", err)
-		}
-	case "grpc":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.GRPCSettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal grpc settings error: %s", err)
 		}
 	default:
 		return errors.New("the network type is not vail")
