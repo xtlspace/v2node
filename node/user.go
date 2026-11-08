@@ -74,6 +74,30 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 	return nil
 }
 
+// mergeUserList applies the successfully processed user changes to the current
+// list. Users whose add/delete failed are intentionally kept so that the next
+// poll can retry them.
+func mergeUserList(current, added, deleted, modified []panel.UserInfo) []panel.UserInfo {
+	next := make(map[string]panel.UserInfo, len(current)+len(added))
+	for _, u := range current {
+		next[u.Uuid] = u
+	}
+	for _, u := range deleted {
+		delete(next, u.Uuid)
+	}
+	for _, u := range added {
+		next[u.Uuid] = u
+	}
+	for _, u := range modified {
+		next[u.Uuid] = u
+	}
+	result := make([]panel.UserInfo, 0, len(next))
+	for _, u := range next {
+		result = append(result, u)
+	}
+	return result
+}
+
 func compareUserList(old, new []panel.UserInfo) (deleted, added, modified []panel.UserInfo) {
 	oldMap := make(map[string]panel.UserInfo, len(old))
 	for _, u := range old {

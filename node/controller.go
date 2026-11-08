@@ -88,7 +88,10 @@ func (c *Controller) Start(x *core.V2Core) error {
 	if err != nil {
 		return fmt.Errorf("add users error: %s", err)
 	}
-	log.WithField("tag", c.tag).Infof("Added %d new users", added)
+	// Keep only users that are actually present in the core. Users that failed
+	// to be added will be retried by the periodic user monitor.
+	c.userList = added
+	log.WithField("tag", c.tag).Infof("Added %d new users", len(added))
 	c.info = node
 	c.startTasks(node)
 	return nil

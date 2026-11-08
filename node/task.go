@@ -111,9 +111,10 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 		return nil
 	}
 	deleted, added, modified := compareUserList(c.userList, newU)
+	var deletedDone, addedDone []panel.UserInfo
 	if len(deleted) > 0 {
 		// have deleted users
-		err = c.server.DelUsers(deleted, c.tag, c.info)
+		deletedDone, err = c.server.DelUsers(deleted, c.tag, c.info)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
@@ -124,7 +125,7 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 	}
 	if len(added) > 0 {
 		// have added users
-		_, err = c.server.AddUsers(&vCore.AddUsersParams{
+		addedDone, err = c.server.AddUsers(&vCore.AddUsersParams{
 			Tag:      c.tag,
 			NodeInfo: c.info,
 			Users:    added,
@@ -137,11 +138,12 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 			return nil
 		}
 	}
-	if len(added) > 0 || len(deleted) > 0 || len(modified) > 0 {
+	if len(addedDone) > 0 || len(deletedDone) > 0 || len(modified) > 0 {
 		// update Limiter
-		c.limiter.UpdateUser(c.tag, added, deleted, modified)
+		c.limiter.UpdateUser(c.tag, addedDone, deletedDone, modified)
 	}
-	c.userList = newU
-	log.WithField("tag", c.tag).Infof("%d user deleted, %d user added, %d user modified", len(deleted), len(added), len(modified))
+	// Keep failed users in the old list so that the next round retries them.
+	c.userList = mergeUserList(c.userList, addedDone, deletedDone, modified)
+	log.WithField("tag", c.tag).Infof("%d user deleted, %d user added, %d user modified", len(deletedDone), len(addedDone), len(modified))
 	return nil
 }

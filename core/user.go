@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	panel "github.com/wyx2685/v2node/api/v2board"
 	"github.com/wyx2685/v2node/common/counter"
 	"github.com/wyx2685/v2node/common/format"
@@ -40,23 +41,37 @@ func (v *V2Core) GetUserManager(tag string) (proxy.UserManager, error) {
 	return userManager, nil
 }
 
-func (vc *V2Core) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) error {
+func (vc *V2Core) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) (deleted []panel.UserInfo, err error) {
 	userManager, err := vc.GetUserManager(tag)
 	if err != nil {
-		return fmt.Errorf("get user manager error: %s", err)
+		return nil, fmt.Errorf("get user manager error: %s", err)
 	}
-	var user string
-	vc.users.mapLock.Lock()
-	defer vc.users.mapLock.Unlock()
 	for i := range users {
-		user = format.UserTag(tag, users[i].Uuid)
+		user := format.UserTag(tag, users[i].Uuid)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err = userManager.RemoveUser(ctx, user)
-		cancel()
-		if err != nil {
-			return err
+		var removeErr error
+		if userManager.GetUser(ctx, user) != nil {
+			removeErr = userManager.RemoveUser(ctx, user)
 		}
+		cancel()
+		if removeErr != nil {
+			// A concurrent removal, or a protocol that keeps reporting the
+			// user after removal, must not block the rest of the batch.
+			checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			stillExists := userManager.GetUser(checkCtx, user) != nil
+			checkCancel()
+			if stillExists {
+				log.WithFields(log.Fields{
+					"tag":   tag,
+					"email": user,
+					"err":   removeErr,
+				}).Error("Remove user failed")
+				continue
+			}
+		}
+		vc.users.mapLock.Lock()
 		delete(vc.users.uidMap, user)
+		vc.users.mapLock.Unlock()
 		if v, ok := vc.dispatcher.Counter.Load(tag); ok {
 			tc := v.(*counter.TrafficCounter)
 			tc.Delete(user)
@@ -66,8 +81,9 @@ func (vc *V2Core) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo
 			lm.CloseAll()
 			vc.dispatcher.LinkManagers.Delete(user)
 		}
+		deleted = append(deleted, users[i])
 	}
-	return nil
+	return deleted, nil
 }
 
 func (vc *V2Core) GetUserTrafficSlice(tag string, mintraffic int) ([]panel.UserTraffic, error) {
@@ -104,12 +120,7 @@ func (vc *V2Core) GetUserTrafficSlice(tag string, mintraffic int) ([]panel.UserT
 	return nil, nil
 }
 
-func (v *V2Core) AddUsers(p *AddUsersParams) (added int, err error) {
-	v.users.mapLock.Lock()
-	defer v.users.mapLock.Unlock()
-	for i := range p.Users {
-		v.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
-	}
+func (v *V2Core) AddUsers(p *AddUsersParams) (added []panel.UserInfo, err error) {
 	var users []*protocol.User
 	switch p.NodeInfo.Type {
 	case "vless":
@@ -126,25 +137,50 @@ func (v *V2Core) AddUsers(p *AddUsersParams) (added int, err error) {
 	case "anytls":
 		users = buildAnyTLSUsers(p.Tag, p.Users)
 	default:
-		return 0, fmt.Errorf("unsupported node type: %s", p.NodeInfo.Type)
+		return nil, fmt.Errorf("unsupported node type: %s", p.NodeInfo.Type)
 	}
 	man, err := v.GetUserManager(p.Tag)
 	if err != nil {
-		return 0, fmt.Errorf("get user manager error: %s", err)
+		return nil, fmt.Errorf("get user manager error: %s", err)
 	}
-	for _, u := range users {
-		mUser, err := u.ToMemoryUser()
-		if err != nil {
-			return 0, err
+	for i, u := range users {
+		userInfo := p.Users[i]
+		user := format.UserTag(p.Tag, userInfo.Uuid)
+		mUser, buildErr := u.ToMemoryUser()
+		if buildErr != nil {
+			log.WithFields(log.Fields{
+				"tag":   p.Tag,
+				"email": user,
+				"err":   buildErr,
+			}).Error("Build user failed")
+			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err = man.AddUser(ctx, mUser)
-		cancel()
-		if err != nil {
-			return 0, err
+		var addErr error
+		if man.GetUser(ctx, user) == nil {
+			addErr = man.AddUser(ctx, mUser)
 		}
+		cancel()
+		if addErr != nil {
+			// Re-check to treat a concurrent add (or "already exists") as success.
+			checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			exists := man.GetUser(checkCtx, user) != nil
+			checkCancel()
+			if !exists {
+				log.WithFields(log.Fields{
+					"tag":   p.Tag,
+					"email": user,
+					"err":   addErr,
+				}).Error("Add user failed")
+				continue
+			}
+		}
+		v.users.mapLock.Lock()
+		v.users.uidMap[user] = userInfo.Id
+		v.users.mapLock.Unlock()
+		added = append(added, userInfo)
 	}
-	return len(users), nil
+	return added, nil
 }
 
 func buildVlessUsers(tag string, userInfo []panel.UserInfo, flow string) (users []*protocol.User) {
