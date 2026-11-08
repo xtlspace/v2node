@@ -38,7 +38,7 @@ func (c *Controller) requestCert() error {
 		if cert.CertFile == "" || cert.KeyFile == "" {
 			return fmt.Errorf("cert file path or key file path not exist")
 		}
-	case "dns", "http":
+	case "http":
 		if cert.CertFile == "" || cert.KeyFile == "" {
 			return fmt.Errorf("cert file path or key file path not exist")
 		}

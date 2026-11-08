@@ -17,7 +17,6 @@ import (
 
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/challenge/http01"
-	"github.com/go-acme/lego/v4/providers/dns"
 	"github.com/go-acme/lego/v4/registration"
 
 	"github.com/go-acme/lego/v4/certcrypto"
@@ -72,18 +71,6 @@ func (l *Lego) SetProvider() error {
 		err := l.client.Challenge.SetHTTP01Provider(http01.NewProviderServer("", "80"))
 		if err != nil {
 			return err
-		}
-	case "dns":
-		for k, v := range l.config.DNSEnv {
-			os.Setenv(k, v)
-		}
-		p, err := dns.NewDNSChallengeProviderByName(l.config.Provider)
-		if err != nil {
-			return fmt.Errorf("create dns challenge provider error: %s", err)
-		}
-		err = l.client.Challenge.SetDNS01Provider(p)
-		if err != nil {
-			return fmt.Errorf("set dns provider error: %s", err)
 		}
 	}
 	return nil

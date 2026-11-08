@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
-	"strings"
 	"time"
 
 	"encoding/json"
@@ -94,8 +93,6 @@ type TlsSettings struct {
 	KeyFile          string   `json:"key_file"`
 	TlsCert          string   `json:"tls_cert"`
 	TlsKey           string   `json:"tls_key"`
-	Provider         string   `json:"provider"`
-	DNSEnv           string   `json:"dns_env"`
 	RejectUnknownSni string   `json:"reject_unknown_sni"`
 }
 
@@ -107,8 +104,6 @@ type CertInfo struct {
 	TlsKey           string
 	Email            string
 	CertDomain       string
-	DNSEnv           map[string]string
-	Provider         string
 	RejectUnknownSni bool
 }
 
@@ -188,18 +183,7 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 		KeyFile:          kf,
 		Email:            "node@v2board.com",
 		CertDomain:       cm.TlsSettings.PrimaryServerName(),
-		DNSEnv:           make(map[string]string),
-		Provider:         cm.TlsSettings.Provider,
 		RejectUnknownSni: cm.TlsSettings.RejectUnknownSni == "1",
-	}
-	if cm.CertInfo.CertMode == "dns" && cm.TlsSettings.DNSEnv != "" {
-		envs := strings.Split(cm.TlsSettings.DNSEnv, ",")
-		for _, env := range envs {
-			kv := strings.SplitN(env, "=", 2)
-			if len(kv) == 2 {
-				cm.CertInfo.DNSEnv[kv[0]] = kv[1]
-			}
-		}
 	}
 	if cm.CertInfo.CertMode == "remote" {
 		cm.CertInfo.TlsCert = cm.TlsSettings.TlsCert
