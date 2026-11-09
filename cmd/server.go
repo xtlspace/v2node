@@ -19,7 +19,6 @@ import (
 
 var (
 	config string
-	watch  bool
 )
 
 var serverCommand = cobra.Command{
@@ -33,9 +32,6 @@ func init() {
 	serverCommand.PersistentFlags().
 		StringVarP(&config, "config", "c",
 			"/etc/v2node/config.json", "config file path")
-	serverCommand.PersistentFlags().
-		BoolVarP(&watch, "watch", "w",
-			true, "watch file path change")
 	command.AddCommand(&serverCommand)
 }
 
@@ -119,19 +115,6 @@ func serverHandle(_ *cobra.Command, _ []string) {
 			log.WithField("err", err).Error("Close nodes failed")
 		}
 	}()
-	if watch {
-		// On file change, just signal reload; do not run reload concurrently here
-		err = c.Watch(config, func() {
-			select {
-			case reloadCh <- struct{}{}:
-			default: // drop if a reload is already queued
-			}
-		})
-		if err != nil {
-			log.WithField("err", err).Error("start watch failed")
-			return
-		}
-	}
 	// clear memory
 	runtime.GC()
 

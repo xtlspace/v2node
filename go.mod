@@ -3,7 +3,6 @@ module github.com/wyx2685/v2node
 go 1.27.1
 
 require (
-	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-acme/lego/v4 v4.35.2
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/juju/ratelimit v1.0.2
@@ -19,6 +18,7 @@ require (
 	github.com/andybalholm/brotli v1.2.3 // indirect
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
+	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
