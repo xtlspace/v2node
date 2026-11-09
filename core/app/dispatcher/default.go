@@ -4,6 +4,7 @@ package dispatcher
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +34,14 @@ import (
 )
 
 var errSniffingTimeout = errors.New("timeout on sniffing")
+
+func sourceAddr(inbound *session.Inbound) netip.Addr {
+	if inbound == nil || inbound.Source.Address == nil {
+		return netip.Addr{}
+	}
+	addr, _ := netip.AddrFromSlice(inbound.Source.Address.IP())
+	return addr
+}
 
 // dualCounter updates both the user-level traffic counter and the per-device
 // traffic counter for the current reporting interval.
@@ -199,7 +208,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		}
 		// Speed Limit and Device Limit
 		w, ipState, reject := limit.CheckLimit(user.Email,
-			sessionInbound.Source.Address.IP().String(),
+			sourceAddr(sessionInbound),
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")
@@ -401,7 +410,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		}
 		// Speed Limit and Device Limit
 		w, ipState, reject := limit.CheckLimit(user.Email,
-			sessionInbound.Source.Address.IP().String(),
+			sourceAddr(sessionInbound),
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")

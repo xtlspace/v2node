@@ -1,6 +1,7 @@
 package limiter
 
 import (
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -57,7 +58,7 @@ func TestLimiterConcurrentAccess(t *testing.T) {
 		}()
 	}
 
-	run(func() { _, _, _ = l.CheckLimit(tag, "1.2.3.4", true) })
+	run(func() { _, _, _ = l.CheckLimit(tag, netip.MustParseAddr("1.2.3.4"), true) })
 	run(func() { _, _ = l.GetOnlineDevice(0) })
 	run(func() {
 		l.UpdateUser("node-race", nil, nil, []panel.UserInfo{{
@@ -74,20 +75,20 @@ func TestLimiterConcurrentAccess(t *testing.T) {
 func TestNormalizeDeviceIP(t *testing.T) {
 	tests := []struct {
 		name string
-		ip   string
-		want string
+		ip   netip.Addr
+		want netip.Addr
 	}{
-		{"ipv4", "1.2.3.4", "1.2.3.4"},
-		{"ipv4 mapped", "::ffff:1.2.3.4", "1.2.3.4"},
-		{"ipv6 /64", "2001:db8:1:2:3:4:5:6", "2001:db8:1:2::"},
-		{"ipv6 /64 second host", "2001:db8:1:2:ffff::1", "2001:db8:1:2::"},
-		{"ipv6 loopback", "::1", "::"},
-		{"invalid", "not-an-ip", "not-an-ip"},
+		{"ipv4", netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("1.2.3.4")},
+		{"ipv4 mapped", netip.MustParseAddr("::ffff:1.2.3.4"), netip.MustParseAddr("1.2.3.4")},
+		{"ipv6 /64", netip.MustParseAddr("2001:db8:1:2:3:4:5:6"), netip.MustParseAddr("2001:db8:1:2::")},
+		{"ipv6 /64 second host", netip.MustParseAddr("2001:db8:1:2:ffff::1"), netip.MustParseAddr("2001:db8:1:2::")},
+		{"ipv6 loopback", netip.MustParseAddr("::1"), netip.MustParseAddr("::")},
+		{"invalid", netip.Addr{}, netip.Addr{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := normalizeDeviceIP(tt.ip); got != tt.want {
-				t.Fatalf("normalizeDeviceIP(%q) = %q, want %q", tt.ip, got, tt.want)
+				t.Fatalf("normalizeDeviceIP(%v) = %v, want %v", tt.ip, got, tt.want)
 			}
 		})
 	}
@@ -101,11 +102,11 @@ func TestCheckLimitAggregatesIPv6By64(t *testing.T) {
 	defer DeleteLimiter("node-v6")
 
 	tag := format.UserTag("node-v6", "uuid-v6")
-	_, state1, reject := l.CheckLimit(tag, "2001:db8:1:2::1", true)
+	_, state1, reject := l.CheckLimit(tag, netip.MustParseAddr("2001:db8:1:2::1"), true)
 	if reject || state1 == nil {
 		t.Fatalf("first connect: reject=%v state=%v", reject, state1)
 	}
-	_, state2, reject := l.CheckLimit(tag, "2001:db8:1:2::ffff", true)
+	_, state2, reject := l.CheckLimit(tag, netip.MustParseAddr("2001:db8:1:2::ffff"), true)
 	if reject || state2 == nil {
 		t.Fatalf("second connect: reject=%v state=%v", reject, state2)
 	}
@@ -137,8 +138,8 @@ func TestGetOnlineDeviceFiltersByPerIPTraffic(t *testing.T) {
 	defer DeleteLimiter("node-perip")
 
 	tag := format.UserTag("node-perip", "uuid-perip")
-	_, high, _ := l.CheckLimit(tag, "1.2.3.4", true)
-	_, low, _ := l.CheckLimit(tag, "5.6.7.8", true)
+	_, high, _ := l.CheckLimit(tag, netip.MustParseAddr("1.2.3.4"), true)
+	_, low, _ := l.CheckLimit(tag, netip.MustParseAddr("5.6.7.8"), true)
 	if high == nil || low == nil {
 		t.Fatal("expected IPState for both connections")
 	}
@@ -162,10 +163,10 @@ func TestGetOnlineDeviceWithoutFilter(t *testing.T) {
 	defer DeleteLimiter("node-nofilter")
 
 	tag := format.UserTag("node-nofilter", "uuid-nofilter")
-	if _, _, reject := l.CheckLimit(tag, "1.2.3.4", true); reject {
+	if _, _, reject := l.CheckLimit(tag, netip.MustParseAddr("1.2.3.4"), true); reject {
 		t.Fatal("user rejected unexpectedly")
 	}
-	if _, _, reject := l.CheckLimit(tag, "5.6.7.8", true); reject {
+	if _, _, reject := l.CheckLimit(tag, netip.MustParseAddr("5.6.7.8"), true); reject {
 		t.Fatal("user rejected unexpectedly")
 	}
 

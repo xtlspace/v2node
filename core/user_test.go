@@ -7,12 +7,20 @@ import (
 	"github.com/wyx2685/v2node/core/app/dispatcher"
 )
 
+func userMapWith(values map[string]int) *UserMap {
+	u := &UserMap{}
+	for key, value := range values {
+		u.uidMap.Store(key, value)
+	}
+	return u
+}
+
 func TestGetUserTrafficSnapshot(t *testing.T) {
 	vc := &V2Core{
-		users: &UserMap{uidMap: map[string]int{
+		users: userMapWith(map[string]int{
 			"tag-uuid1": 1,
 			"tag-uuid2": 2,
-		}},
+		}),
 		dispatcher: &dispatcher.DefaultDispatcher{},
 	}
 	tc := counter.NewTrafficCounter()
@@ -48,10 +56,10 @@ func TestGetUserTrafficSnapshot(t *testing.T) {
 
 func TestCommitUserTraffic(t *testing.T) {
 	vc := &V2Core{
-		users: &UserMap{uidMap: map[string]int{
+		users: userMapWith(map[string]int{
 			"tag-uuid1": 1,
 			"tag-uuid2": 2,
-		}},
+		}),
 		dispatcher: &dispatcher.DefaultDispatcher{},
 	}
 	tc := counter.NewTrafficCounter()
@@ -83,7 +91,7 @@ func TestCommitUserTraffic(t *testing.T) {
 
 func TestCommitUserTrafficClampsToZero(t *testing.T) {
 	vc := &V2Core{
-		users:      &UserMap{uidMap: map[string]int{"tag-uuid": 1}},
+		users:      userMapWith(map[string]int{"tag-uuid": 1}),
 		dispatcher: &dispatcher.DefaultDispatcher{},
 	}
 	tc := counter.NewTrafficCounter()

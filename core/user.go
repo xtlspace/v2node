@@ -70,9 +70,7 @@ func (vc *V2Core) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo
 				continue
 			}
 		}
-		vc.users.mapLock.Lock()
-		delete(vc.users.uidMap, user)
-		vc.users.mapLock.Unlock()
+		vc.users.uidMap.Delete(user)
 		if v, ok := vc.dispatcher.Counter.Load(tag); ok {
 			tc := v.(*counter.TrafficCounter)
 			tc.Delete(user)
@@ -107,13 +105,6 @@ func (vc *V2Core) GetUserTrafficSnapshot(tag string) []UserTrafficSnapshot {
 	}
 	c := v.(*counter.TrafficCounter)
 
-	vc.users.mapLock.RLock()
-	uidMap := make(map[string]int, len(vc.users.uidMap))
-	for email, uid := range vc.users.uidMap {
-		uidMap[email] = uid
-	}
-	vc.users.mapLock.RUnlock()
-
 	snapshots := make([]UserTrafficSnapshot, 0)
 	c.Counters.Range(func(key, value interface{}) bool {
 		email := key.(string)
@@ -123,9 +114,14 @@ func (vc *V2Core) GetUserTrafficSnapshot(tag string) []UserTrafficSnapshot {
 		if up+down <= 0 {
 			return true
 		}
-		uid, ok := uidMap[email]
-		if !ok || uid == 0 {
+		uidValue, ok := vc.users.uidMap.Load(email)
+		if !ok {
 			// The user was deleted; drop the stale counter.
+			c.Delete(email)
+			return true
+		}
+		uid, ok := uidValue.(int)
+		if !ok || uid == 0 {
 			c.Delete(email)
 			return true
 		}
@@ -233,9 +229,7 @@ func (v *V2Core) AddUsers(p *AddUsersParams) (added []panel.UserInfo, err error)
 				continue
 			}
 		}
-		v.users.mapLock.Lock()
-		v.users.uidMap[user] = userInfo.Id
-		v.users.mapLock.Unlock()
+		v.users.uidMap.Store(user, userInfo.Id)
 		added = append(added, userInfo)
 	}
 	return added, nil
