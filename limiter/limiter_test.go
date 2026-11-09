@@ -3,6 +3,7 @@ package limiter
 import (
 	"sync"
 	"testing"
+	"time"
 
 	panel "github.com/wyx2685/v2node/api/v2board"
 	"github.com/wyx2685/v2node/common/format"
@@ -34,6 +35,39 @@ func TestAliveListConcurrentAccess(t *testing.T) {
 			}
 		}(i)
 	}
+	wg.Wait()
+}
+
+func TestLimiterConcurrentAccess(t *testing.T) {
+	Init()
+	l := AddLimiter("vless", "node-race", 0, []panel.UserInfo{{
+		Id: 1, Uuid: "uuid-race", SpeedLimit: 10, DeviceLimit: 5,
+	}}, map[int]int{1: 0})
+	defer DeleteLimiter("node-race")
+
+	tag := format.UserTag("node-race", "uuid-race")
+	var wg sync.WaitGroup
+	run := func(fn func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				fn()
+			}
+		}()
+	}
+
+	run(func() { _, _, _ = l.CheckLimit(tag, "1.2.3.4", true) })
+	run(func() { _, _ = l.GetOnlineDevice(0) })
+	run(func() {
+		l.UpdateUser("node-race", nil, nil, []panel.UserInfo{{
+			Id: 1, Uuid: "uuid-race", SpeedLimit: 20, DeviceLimit: 6,
+		}})
+	})
+	run(func() {
+		_ = l.UpdateDynamicSpeedLimit("node-race", "uuid-race", 30, time.Now().Add(time.Hour))
+	})
+
 	wg.Wait()
 }
 
