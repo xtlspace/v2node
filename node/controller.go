@@ -99,7 +99,8 @@ func (c *Controller) Start(x *core.V2Core) error {
 
 // Close implement the Close() function of the service interface
 func (c *Controller) Close() error {
-	limiter.DeleteLimiter(c.tag)
+	// Stop periodic tasks first so they cannot access the limiter or core while
+	// the node is being torn down.
 	if c.nodeInfoMonitorPeriodic != nil {
 		c.nodeInfoMonitorPeriodic.Close()
 	}
@@ -108,6 +109,10 @@ func (c *Controller) Close() error {
 	}
 	if c.renewCertPeriodic != nil {
 		c.renewCertPeriodic.Close()
+	}
+	limiter.DeleteLimiter(c.tag)
+	if c.server == nil {
+		return nil
 	}
 	err := c.server.DelNode(c.tag)
 	if err != nil {

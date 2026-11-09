@@ -66,9 +66,15 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		f, err := os.OpenFile(c.LogConfig.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			log.WithField("err", err).Error("Open log file failed, using stdout instead")
+		} else {
+			log.SetOutput(f)
 		}
-		log.SetOutput(f)
 	}
+	defer func() {
+		if f, ok := log.StandardLogger().Out.(*os.File); ok && f != os.Stdout && f != os.Stderr {
+			_ = f.Close()
+		}
+	}()
 	// Enable pprof if configured
 	if c.PprofPort != 0 {
 		go func() {
@@ -96,7 +102,11 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		log.WithField("err", err).Error("Start core failed")
 		return
 	}
-	defer v2core.Close()
+	defer func() {
+		if err := v2core.Close(); err != nil {
+			log.WithField("err", err).Error("Close core failed")
+		}
+	}()
 	//node
 	err = nodes.Start(c.NodeConfigs, v2core)
 	if err != nil {
@@ -104,6 +114,11 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		return
 	}
 	log.Info("Nodes started")
+	defer func() {
+		if err := nodes.Close(); err != nil {
+			log.WithField("err", err).Error("Close nodes failed")
+		}
+	}()
 	if watch {
 		// On file change, just signal reload; do not run reload concurrently here
 		err = c.Watch(config, func() {
@@ -127,7 +142,7 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		select {
 		case <-osSignals:
 			log.Info("收到退出信号，正在关闭程序...")
-			os.Exit(0)
+			return
 		case <-reloadCh:
 			log.Info("收到重启信号，正在重新加载配置...")
 			if err := reload(config, &nodes, &v2core); err != nil {
