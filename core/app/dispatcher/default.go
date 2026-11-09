@@ -247,17 +247,14 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		}
 
 		ts := t.GetCounter(user.Email)
-		upcounter := &counter.XrayTrafficCounter{V: &ts.UpCounter}
-		downcounter := &counter.XrayTrafficCounter{V: &ts.DownCounter}
-		var up stats.Counter = upcounter
+		managedWriter.userCounter = &ts.UpStats
+		if ipState != nil {
+			managedWriter.ipCounter = &ipState.Up
+		}
+		downcounter := &ts.DownStats
 		var down stats.Counter = downcounter
 		if ipState != nil {
-			up = &dualCounter{user: upcounter, ip: &ipState.Up}
 			down = &dualCounter{user: downcounter, ip: &ipState.Down}
-		}
-		inboundLink.Writer = &dispatcher.SizeStatWriter{
-			Counter: up,
-			Writer:  inboundLink.Writer,
 		}
 		outboundLink.Writer = &dispatcher.SizeStatWriter{
 			Counter: down,
@@ -445,13 +442,18 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		}
 
 		ts := t.GetCounter(user.Email)
-		downcounter := &counter.XrayTrafficCounter{V: &ts.DownCounter}
-		var down stats.Counter = downcounter
+		managedWriter.userCounter = &ts.DownStats
 		if ipState != nil {
-			down = &dualCounter{user: downcounter, ip: &ipState.Down}
+			managedWriter.ipCounter = &ipState.Down
+		}
+		var reader buf.TimeoutReader
+		if tr, ok := outbound.Reader.(buf.TimeoutReader); ok {
+			reader = tr
+		} else {
+			reader = &buf.TimeoutWrapperReader{Reader: outbound.Reader}
 		}
 		counterReader := &CounterReader{
-			Reader:  &buf.TimeoutWrapperReader{Reader: outbound.Reader},
+			Reader:  reader,
 			Counter: &ts.UpCounter,
 		}
 		if ipState != nil {
@@ -465,10 +467,6 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			outbound.Reader = counterReader
 		}
 		lm.AddLink(managedWriter, outbound.Reader)
-		outbound.Writer = &dispatcher.SizeStatWriter{
-			Counter: down,
-			Writer:  outbound.Writer,
-		}
 	}
 
 	sniffingRequest := content.SniffingRequest

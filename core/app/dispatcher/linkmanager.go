@@ -2,17 +2,28 @@ package dispatcher
 
 import (
 	sync "sync"
+	"sync/atomic"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/features/stats"
 )
 
 type ManagedWriter struct {
-	writer  buf.Writer
-	manager *LinkManager
+	writer      buf.Writer
+	manager     *LinkManager
+	userCounter stats.Counter
+	ipCounter   *atomic.Int64
 }
 
 func (w *ManagedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	n := int64(mb.Len())
+	if w.userCounter != nil {
+		w.userCounter.Add(n)
+	}
+	if w.ipCounter != nil {
+		w.ipCounter.Add(n)
+	}
 	return w.writer.WriteMultiBuffer(mb)
 }
 
