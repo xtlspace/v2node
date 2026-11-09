@@ -10,6 +10,15 @@ import (
 )
 
 func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
+	// Serialize periodic and final reports. If shutdown cancels the context
+	// while waiting, do not take/consume a snapshot.
+	select {
+	case c.reportSem <- struct{}{}:
+		defer func() { <-c.reportSem }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	var reportmin = 0
 	var devicemin = 0
 	if c.info.Common.BaseConfig != nil {

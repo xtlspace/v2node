@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	panel "github.com/wyx2685/v2node/api/v2board"
@@ -25,6 +26,7 @@ type Controller struct {
 	nodeInfoMonitorPeriodic *task.Task
 	userReportPeriodic      *task.Task
 	renewCertPeriodic       *task.Task
+	reportSem               chan struct{}
 }
 
 // NewController return a Node controller with default parameters.
@@ -33,6 +35,7 @@ func NewController(api *panel.Client, conf *conf.NodeConfig, info *panel.NodeInf
 		apiClient: api,
 		info:      info,
 		conf:      conf,
+		reportSem: make(chan struct{}, 1),
 	}
 	return controller
 }
@@ -110,6 +113,22 @@ func (c *Controller) Close() error {
 	if c.renewCertPeriodic != nil {
 		c.renewCertPeriodic.Close()
 	}
+
+	// Flush the last traffic/online-device window before tearing down the node.
+	// reportSem serializes this with an in-flight periodic report.
+	if c.server != nil && c.apiClient != nil && c.limiter != nil && c.info != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := c.reportUserTrafficTask(ctx); err != nil {
+			log.WithFields(log.Fields{
+				"tag": c.tag,
+				"err": err,
+			}).Warn("Final traffic report failed")
+		} else {
+			log.WithField("tag", c.tag).Info("Final traffic report completed")
+		}
+		cancel()
+	}
+
 	limiter.DeleteLimiter(c.tag)
 	if c.server == nil {
 		return nil
