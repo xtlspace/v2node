@@ -14,9 +14,18 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goamd64: v2
+            artifact: v2node-linux-amd64
+          - goamd64: v3
+            artifact: v2node-linux-amd64-v3
     env:
       GOOS: linux
       GOARCH: amd64
+      GOAMD64: ${{ matrix.goamd64 }}
       CGO_ENABLED: 0
       GOEXPERIMENT: jsonv2
     steps:
@@ -31,15 +40,33 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Build linux/amd64
+      - name: Build linux/amd64 ${{ matrix.goamd64 }}
         run: |
           mkdir -p build_assets
+          out="build_assets/${{ matrix.artifact }}"
           go build -v \
-            -o build_assets/v2node-linux-amd64 \
+            -o "$out" \
             -trimpath \
             -ldflags "-X 'github.com/wyx2685/v2node/cmd.version=${{ inputs.version }}' -s -w -buildid="
-          ls -lh build_assets/v2node-linux-amd64
-          file build_assets/v2node-linux-amd64
+          ls -lh "$out"
+          file "$out"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: build_assets/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: build_assets
+          merge-multiple: true
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -48,4 +75,6 @@ jobs:
           tag_name: ${{ inputs.version }}
           name: ${{ inputs.version }}
           target_commitish: ${{ github.sha }}
-          files: build_assets/v2node-linux-amd64
+          files: |
+            build_assets/v2node-linux-amd64
+            build_assets/v2node-linux-amd64-v3
