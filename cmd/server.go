@@ -129,34 +129,124 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		case <-reloadCh:
 			log.Info("收到重启信号，正在重新加载配置...")
 			if err := reload(config, &nodes, &v2core); err != nil {
-				log.WithField("err", err).Panic("重启失败")
+				log.WithField("err", err).Error("reload failed")
+			} else {
+				log.Info("重启成功")
 			}
-			log.Info("重启成功")
 		}
 	}
 }
 
 func reload(config string, nodes **node.Node, v2core **core.V2Core) error {
-	// Preserve old reload channel so new core continues to receive signals
+	var oldConf *conf.Conf
 	var oldReloadCh chan struct{}
 	if *v2core != nil {
+		oldConf = (*v2core).Config
 		oldReloadCh = (*v2core).ReloadCh
 	}
 
-	if err := (*nodes).Close(); err != nil {
-		return err
-	}
-
-	if err := (*v2core).Close(); err != nil {
-		return err
-	}
-
+	// Load and validate the new configuration before touching the old service.
 	newConf := conf.New()
 	if err := newConf.LoadFromPath(config); err != nil {
-		return err
+		return fmt.Errorf("load config: %w", err)
 	}
 
-	switch newConf.LogConfig.Level {
+	// Open the new log file before stopping the old service.
+	newLogFile, err := openLogFile(newConf.LogConfig.Output)
+	if err != nil {
+		return err
+	}
+	logCommitted := false
+	defer func() {
+		if !logCommitted && newLogFile != nil {
+			_ = newLogFile.Close()
+		}
+	}()
+
+	// Fetch panel data for the new configuration while the old service is
+	// still running.
+	newNodes, err := node.New(newConf.NodeConfigs)
+	if err != nil {
+		return fmt.Errorf("get node info: %w", err)
+	}
+
+	// The old service can be stopped only after the new configuration and
+	// panel data have been validated.
+	if err := (*nodes).Close(); err != nil {
+		log.WithField("err", err).Error("Close old nodes failed")
+	}
+	if err := (*v2core).Close(); err != nil {
+		log.WithField("err", err).Error("Close old core failed")
+	}
+
+	newCore, err := startCore(newConf, newNodes, oldReloadCh)
+	if err != nil {
+		// Try to restore the old configuration if starting the new one failed.
+		if oldConf != nil {
+			if rbNodes, rbCore, rbErr := startNodesAndCore(oldConf, oldReloadCh); rbErr == nil {
+				*nodes = rbNodes
+				*v2core = rbCore
+				return fmt.Errorf("start new service: %w; rolled back to old config", err)
+			} else {
+				return fmt.Errorf("start new service: %w; rollback failed: %v", err, rbErr)
+			}
+		}
+		return fmt.Errorf("start new service: %w", err)
+	}
+
+	// Commit log settings and swap instances only after the new service started.
+	applyLogLevel(newConf.LogConfig.Level)
+	switchLogOutput(newLogFile)
+	logCommitted = true
+
+	*nodes = newNodes
+	*v2core = newCore
+
+	runtime.GC()
+	return nil
+}
+
+func startCore(c *conf.Conf, n *node.Node, reloadCh chan struct{}) (*core.V2Core, error) {
+	v := core.New(c)
+	v.ReloadCh = reloadCh
+	if err := v.Start(n.NodeInfos); err != nil {
+		_ = v.Close()
+		_ = n.Close()
+		return nil, fmt.Errorf("start core: %w", err)
+	}
+	if err := n.Start(c.NodeConfigs, v); err != nil {
+		_ = v.Close()
+		_ = n.Close()
+		return nil, fmt.Errorf("start nodes: %w", err)
+	}
+	return v, nil
+}
+
+func startNodesAndCore(c *conf.Conf, reloadCh chan struct{}) (*node.Node, *core.V2Core, error) {
+	n, err := node.New(c.NodeConfigs)
+	if err != nil {
+		return nil, nil, err
+	}
+	v, err := startCore(c, n, reloadCh)
+	if err != nil {
+		return nil, nil, err
+	}
+	return n, v, nil
+}
+
+func openLogFile(path string) (*os.File, error) {
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open log file: %w", err)
+	}
+	return f, nil
+}
+
+func applyLogLevel(level string) {
+	switch level {
 	case "debug":
 		log.SetLevel(log.DebugLevel)
 	case "info":
@@ -166,38 +256,16 @@ func reload(config string, nodes **node.Node, v2core **core.V2Core) error {
 	case "error":
 		log.SetLevel(log.ErrorLevel)
 	}
-	if newConf.LogConfig.Output != "" {
-		f, err := os.OpenFile(newConf.LogConfig.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			log.WithField("err", err).Error("Open log file failed, using stdout instead")
-		} else {
-			// 关闭旧的日志文件（如果是文件）
-			if oldWriter, ok := log.StandardLogger().Out.(*os.File); ok && oldWriter != os.Stdout && oldWriter != os.Stderr {
-				oldWriter.Close()
-			}
-			log.SetOutput(f)
-		}
+}
+
+func switchLogOutput(f *os.File) {
+	old := log.StandardLogger().Out
+	if f != nil {
+		log.SetOutput(f)
+	} else {
+		log.SetOutput(os.Stderr)
 	}
-
-	newNodes, err := node.New(newConf.NodeConfigs)
-	if err != nil {
-		return err
+	if oldFile, ok := old.(*os.File); ok && oldFile != os.Stdout && oldFile != os.Stderr {
+		_ = oldFile.Close()
 	}
-
-	newCore := core.New(newConf)
-	// Reattach reload channel
-	newCore.ReloadCh = oldReloadCh
-	if err := newCore.Start(newNodes.NodeInfos); err != nil {
-		return err
-	}
-
-	if err := newNodes.Start(newConf.NodeConfigs, newCore); err != nil {
-		return err
-	}
-
-	*nodes = newNodes
-	*v2core = newCore
-
-	runtime.GC()
-	return nil
 }
