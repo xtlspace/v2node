@@ -28,6 +28,7 @@ type Limiter struct {
 	UserLimitInfo *sync.Map   // Key: TagUUID value: UserLimitInfo
 	SpeedLimiter  *sync.Map   // key: TagUUID, value: *DynamicBucket
 	AliveList     map[int]int // Key: Uid, value: alive_ip
+	aliveLock     sync.RWMutex
 }
 
 type UserLimitInfo struct {
@@ -96,7 +97,7 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		l.UserLimitInfo.Delete(format.UserTag(tag, deleted[i].Uuid))
 		l.UserOnlineIP.Delete(format.UserTag(tag, deleted[i].Uuid))
 		l.SpeedLimiter.Delete(format.UserTag(tag, deleted[i].Uuid))
-		delete(l.AliveList, deleted[i].Id)
+		l.DeleteAlive(deleted[i].Id)
 	}
 	for i := range modified {
 		if v, ok := l.UserLimitInfo.Load(format.UserTag(tag, modified[i].Uuid)); ok {
@@ -132,6 +133,24 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		userLimit.OverLimit = false
 		l.UserLimitInfo.Store(format.UserTag(tag, added[i].Uuid), userLimit)
 	}
+}
+
+func (l *Limiter) SetAliveList(alive map[int]int) {
+	l.aliveLock.Lock()
+	l.AliveList = alive
+	l.aliveLock.Unlock()
+}
+
+func (l *Limiter) GetAlive(uid int) int {
+	l.aliveLock.RLock()
+	defer l.aliveLock.RUnlock()
+	return l.AliveList[uid]
+}
+
+func (l *Limiter) DeleteAlive(uid int) {
+	l.aliveLock.Lock()
+	delete(l.AliveList, uid)
+	l.aliveLock.Unlock()
 }
 
 func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire time.Time) error {
@@ -174,7 +193,7 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPsource bool) (Dynam
 	}
 	if noUDPsource || l.Nodetype == "hysteria2" || l.Nodetype == "tuic" {
 		// Store online user for device limit
-		aliveIp := l.AliveList[uid]
+		aliveIp := l.GetAlive(uid)
 		var reject bool
 		ipState, reject = l.trackOnlineIP(taguuid, ip, uid, deviceLimit, aliveIp)
 		if reject {

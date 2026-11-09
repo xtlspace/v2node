@@ -1,11 +1,41 @@
 package limiter
 
 import (
+	"sync"
 	"testing"
 
 	panel "github.com/wyx2685/v2node/api/v2board"
 	"github.com/wyx2685/v2node/common/format"
 )
+
+func TestAliveListAccess(t *testing.T) {
+	l := &Limiter{}
+	l.SetAliveList(map[int]int{1: 3})
+	if got := l.GetAlive(1); got != 3 {
+		t.Fatalf("GetAlive(1) = %d, want 3", got)
+	}
+	l.DeleteAlive(1)
+	if got := l.GetAlive(1); got != 0 {
+		t.Fatalf("GetAlive(1) after delete = %d, want 0", got)
+	}
+}
+
+func TestAliveListConcurrentAccess(t *testing.T) {
+	l := &Limiter{AliveList: map[int]int{}}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(uid int) {
+			defer wg.Done()
+			for j := 0; j < 500; j++ {
+				l.SetAliveList(map[int]int{uid: j})
+				_ = l.GetAlive(uid)
+				l.DeleteAlive(uid)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
 
 func TestNormalizeDeviceIP(t *testing.T) {
 	tests := []struct {
