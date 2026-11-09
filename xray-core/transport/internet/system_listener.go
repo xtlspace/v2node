@@ -168,7 +168,10 @@ func (dl *DefaultListener) Listen(ctx context.Context, addr net.Addr, sockopt *S
 
 	l, err = callback(lc.Listen(ctx, network, address))
 	if err == nil && sockopt != nil && sockopt.AcceptProxyProtocol {
-		policyFunc := func(upstream net.Addr) (proxyproto.Policy, error) { return proxyproto.REQUIRE, nil }
+		// Accept both connections that send a PROXY protocol header and
+		// connections that connect directly. The header is used when present;
+		// otherwise the real peer address is kept.
+		policyFunc := func(upstream net.Addr) (proxyproto.Policy, error) { return proxyproto.USE, nil }
 		l = &proxyproto.Listener{Listener: l, Policy: policyFunc}
 	}
 	return l, err
