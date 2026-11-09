@@ -38,7 +38,6 @@ type UserLimitInfo struct {
 	DeviceLimit       int
 	DynamicSpeedLimit int
 	ExpireTime        int64
-	OverLimit         bool
 }
 
 // IPState tracks per-device traffic for the current reporting interval.
@@ -68,7 +67,6 @@ func AddLimiter(nodetype string, tag string, speedLimit int, users []panel.UserI
 		if users[i].DeviceLimit != 0 {
 			userLimit.DeviceLimit = users[i].DeviceLimit
 		}
-		userLimit.OverLimit = false
 		l.UserLimitInfo.Store(format.UserTag(tag, users[i].Uuid), userLimit)
 	}
 	limitLock.Lock()
@@ -128,7 +126,6 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		if added[i].DeviceLimit != 0 {
 			userLimit.DeviceLimit = added[i].DeviceLimit
 		}
-		userLimit.OverLimit = false
 		l.addUserLimit(format.UserTag(tag, added[i].Uuid), userLimit)
 	}
 }
@@ -365,9 +362,4 @@ func (l *Limiter) GetOnlineDevice(minTrafficKB int) (*[]panel.OnlineUser, error)
 	l.setOldOnline(next)
 
 	return &onlineUser, nil
-}
-
-type UserIpList struct {
-	Uid    int      `json:"Uid"`
-	IpList []string `json:"Ips"`
 }
