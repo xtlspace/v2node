@@ -32,10 +32,22 @@ type Limiter struct {
 	userLimitLock sync.Mutex
 }
 
+const (
+	// deadStateTTL keeps a closed device around long enough for the next
+	// online-device snapshot to pick up its last traffic window. It is also the
+	// fallback lifetime when that snapshot task is not running.
+	deadStateTTL = 10 * time.Minute
+
+	// deadStateSweepInterval bounds how often the connection path scans a
+	// user's device set for expired states.
+	deadStateSweepInterval = time.Minute
+)
+
 // onlineSet groups the active device states of one user (tag+uuid).
 type onlineSet struct {
-	mu  sync.Mutex
-	ips map[netip.Addr]*IPState
+	mu        sync.Mutex
+	ips       map[netip.Addr]*IPState
+	lastSweep time.Time
 }
 
 type UserLimitInfo struct {
@@ -54,13 +66,15 @@ type IPState struct {
 	Down atomic.Int64
 
 	refs    atomic.Int32
+	deadAt  atomic.Int64 // UnixNano when refs last reached 0; 0 while referenced
 	owner   *Limiter
 	tagUUID string
 	ip      netip.Addr
 }
 
 // Release drops one connection reference. The state is kept until the next
-// online-device snapshot, so the last reader/counter flush can still land.
+// online-device snapshot, so the last reader/counter flush can still land, and
+// is swept from the connection path after deadStateTTL at the latest.
 func (s *IPState) Release() {
 	if s == nil || s.owner == nil {
 		return
@@ -340,8 +354,11 @@ func (l *Limiter) trackOnlineIP(taguuid string, ip netip.Addr, uid, deviceLimit,
 	set.mu.Lock()
 	defer set.mu.Unlock()
 
+	l.sweepDeadLocked(set)
+
 	if state, ok := set.ips[ip]; ok {
 		state.refs.Add(1)
+		state.deadAt.Store(0)
 		return state, false
 	}
 
@@ -380,8 +397,29 @@ func (l *Limiter) releaseIPState(state *IPState) {
 	set.mu.Lock()
 	defer set.mu.Unlock()
 
-	if n := state.refs.Add(-1); n < 0 {
-		state.refs.Store(0)
+	if n := state.refs.Add(-1); n <= 0 {
+		if n < 0 {
+			state.refs.Store(0)
+		}
+		state.deadAt.Store(time.Now().UnixNano())
+	}
+}
+
+// sweepDeadLocked drops device states whose last connection closed more than
+// deadStateTTL ago. It runs from the connection path so that memory stays
+// bounded even when the online-device report task is not running.
+func (l *Limiter) sweepDeadLocked(set *onlineSet) {
+	now := time.Now()
+	if !set.lastSweep.IsZero() && now.Sub(set.lastSweep) < deadStateSweepInterval {
+		return
+	}
+	set.lastSweep = now
+
+	cutoff := now.Add(-deadStateTTL).UnixNano()
+	for ip, state := range set.ips {
+		if dead := state.deadAt.Load(); dead != 0 && dead < cutoff {
+			delete(set.ips, ip)
+		}
 	}
 }
 

@@ -250,3 +250,133 @@ func TestConsumeOldOnlineRejectsDifferentUID(t *testing.T) {
 		t.Fatal("same UID should consume the old online entry")
 	}
 }
+
+func loadOnlineSet(t *testing.T, l *Limiter, taguuid string) *onlineSet {
+	t.Helper()
+	v, ok := l.UserOnlineIP.Load(taguuid)
+	if !ok {
+		t.Fatalf("no online set for %s", taguuid)
+	}
+	return v.(*onlineSet)
+}
+
+// TestSweepRemovesLongClosedDevices covers the case where the online-device
+// report task is not running: cleanup must still happen from the connection
+// path, otherwise closed device states accumulate without bound.
+func TestSweepRemovesLongClosedDevices(t *testing.T) {
+	Init()
+	l := AddLimiter("vless", "node-sweep", 0, []panel.UserInfo{{
+		Id: 1, Uuid: "uuid-sweep", DeviceLimit: 10,
+	}}, map[int]int{1: 0})
+	defer DeleteLimiter("node-sweep")
+
+	tag := format.UserTag("node-sweep", "uuid-sweep")
+	closedIP := netip.MustParseAddr("1.2.3.4")
+	_, state, reject := l.CheckLimit(tag, closedIP, true)
+	if reject || state == nil {
+		t.Fatalf("check limit: reject=%v state=%v", reject, state)
+	}
+	state.Release()
+
+	set := loadOnlineSet(t, l, tag)
+	set.mu.Lock()
+	if _, ok := set.ips[closedIP]; !ok {
+		set.mu.Unlock()
+		t.Fatal("closed device should stay until the next snapshot")
+	}
+	state.deadAt.Store(time.Now().Add(-2 * deadStateTTL).UnixNano())
+	set.lastSweep = time.Time{}
+	set.mu.Unlock()
+
+	// A new connection for the same user triggers the sweep.
+	if _, _, reject := l.CheckLimit(tag, netip.MustParseAddr("5.6.7.8"), true); reject {
+		t.Fatal("unexpected reject")
+	}
+
+	set.mu.Lock()
+	_, kept := set.ips[closedIP]
+	count := len(set.ips)
+	set.mu.Unlock()
+
+	if kept {
+		t.Fatal("expired closed device was not swept")
+	}
+	if count != 1 {
+		t.Fatalf("devices after sweep = %d, want 1", count)
+	}
+}
+
+func TestSweepKeepsFreshClosedDevices(t *testing.T) {
+	Init()
+	l := AddLimiter("vless", "node-sweep-fresh", 0, []panel.UserInfo{{
+		Id: 2, Uuid: "uuid-sweep-fresh", DeviceLimit: 10,
+	}}, map[int]int{2: 0})
+	defer DeleteLimiter("node-sweep-fresh")
+
+	tag := format.UserTag("node-sweep-fresh", "uuid-sweep-fresh")
+	closedIP := netip.MustParseAddr("1.2.3.4")
+	_, state, reject := l.CheckLimit(tag, closedIP, true)
+	if reject || state == nil {
+		t.Fatalf("check limit: reject=%v state=%v", reject, state)
+	}
+	state.Release()
+
+	set := loadOnlineSet(t, l, tag)
+	set.mu.Lock()
+	set.lastSweep = time.Time{}
+	set.mu.Unlock()
+
+	if _, _, reject := l.CheckLimit(tag, netip.MustParseAddr("5.6.7.8"), true); reject {
+		t.Fatal("unexpected reject")
+	}
+
+	set.mu.Lock()
+	_, kept := set.ips[closedIP]
+	set.mu.Unlock()
+	if !kept {
+		t.Fatal("recently closed device must survive the sweep")
+	}
+}
+
+func TestReuseClearsDeadAt(t *testing.T) {
+	Init()
+	l := AddLimiter("vless", "node-reuse", 0, []panel.UserInfo{{
+		Id: 3, Uuid: "uuid-reuse", DeviceLimit: 10,
+	}}, map[int]int{3: 0})
+	defer DeleteLimiter("node-reuse")
+
+	tag := format.UserTag("node-reuse", "uuid-reuse")
+	ip := netip.MustParseAddr("1.2.3.4")
+	_, state, _ := l.CheckLimit(tag, ip, true)
+	state.Release()
+	if state.deadAt.Load() == 0 {
+		t.Fatal("release should mark the state as dead")
+	}
+
+	_, reused, reject := l.CheckLimit(tag, ip, true)
+	if reject || reused != state {
+		t.Fatalf("expected the same state, got %v (reject=%v)", reused, reject)
+	}
+	if reused.deadAt.Load() != 0 {
+		t.Fatal("reusing a state must clear deadAt")
+	}
+}
+
+func BenchmarkCheckLimit(b *testing.B) {
+	Init()
+	l := AddLimiter("vless", "node-bench", 0, []panel.UserInfo{{
+		Id: 1, Uuid: "uuid-bench", DeviceLimit: 100,
+	}}, map[int]int{1: 0})
+	defer DeleteLimiter("node-bench")
+
+	tag := format.UserTag("node-bench", "uuid-bench")
+	ip := netip.MustParseAddr("1.2.3.4")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, state, _ := l.CheckLimit(tag, ip, true)
+		if state != nil {
+			state.Release()
+		}
+	}
+}
