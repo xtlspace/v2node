@@ -2,7 +2,6 @@ package panel
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -101,20 +100,17 @@ func (c *Client) GetUserAlive(ctx context.Context) (map[int]int, error) {
 		ForceContentType("application/json").
 		Get(path)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, err
-		}
-		c.AliveMap.Alive = make(map[int]int)
-		return c.AliveMap.Alive, nil
+		return nil, err
 	}
-	if r == nil || r.RawResponse == nil || r.StatusCode() >= 399 {
-		c.AliveMap.Alive = make(map[int]int)
-		return c.AliveMap.Alive, nil
+	if r == nil || r.RawResponse == nil {
+		return nil, fmt.Errorf("received nil response or raw response")
+	}
+	if r.StatusCode() >= 399 {
+		return nil, fmt.Errorf("alive list request failed with status %d", r.StatusCode())
 	}
 	defer r.RawResponse.Body.Close()
 	if err := json.Unmarshal(r.Body(), c.AliveMap); err != nil {
-		fmt.Printf("unmarshal user alive list error: %s", err)
-		c.AliveMap.Alive = make(map[int]int)
+		return nil, fmt.Errorf("unmarshal user alive list error: %w", err)
 	}
 
 	return c.AliveMap.Alive, nil

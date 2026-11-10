@@ -30,7 +30,22 @@ func New(nodes []conf.NodeConfig) (*Node, error) {
 		if err != nil {
 			return nil, err
 		}
-		n.controllers[i] = NewController(p, &node, info)
+		users, err := p.GetUserList(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("get user list: %w", err)
+		}
+		if len(users) == 0 {
+			return nil, fmt.Errorf("node %s has no users", info.Tag)
+		}
+		alive, err := p.GetUserAlive(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("get user alive list: %w", err)
+		}
+		controller := NewController(p, &node, info)
+		controller.userList = users
+		controller.aliveMap = alive
+		controller.prefetched = true
+		n.controllers[i] = controller
 		n.NodeInfos[i] = info
 	}
 	return n, nil

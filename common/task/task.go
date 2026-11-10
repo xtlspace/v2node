@@ -17,7 +17,10 @@ const minTaskInterval = time.Second
 // can shorten it.
 var stopGrace = 5 * time.Second
 
-var errTaskTimeout = errors.New("task execution timed out")
+var (
+	errTaskTimeout      = errors.New("task execution timed out")
+	errTaskTimeoutStuck = errors.New("task execution did not stop after cancellation")
+)
 
 type Task struct {
 	Name       string
@@ -74,10 +77,17 @@ func (t *Task) Start(first bool) error {
 			if err == nil {
 				return true
 			}
-			if errors.Is(err, errTaskTimeout) {
-				// Do not start another execution: reload is already queued.
+			if errors.Is(err, errTaskTimeoutStuck) {
+				// The execution goroutine did not respond to cancellation.
+				// Do not start another execution on top of it.
 				log.Errorf("Task %s stopped after timeout", t.Name)
 				return false
+			}
+			if errors.Is(err, errTaskTimeout) {
+				// Reload is queued; keep the task alive so panel outages do
+				// not permanently stop synchronization.
+				log.Errorf("Task %s timed out, will retry", t.Name)
+				return true
 			}
 			log.Errorf("Task %s execution error: %v", t.Name, err)
 			// Transient errors should not permanently stop the task.
@@ -166,10 +176,11 @@ func (t *Task) ExecuteWithTimeout() error {
 		// Give the execution goroutine a short chance to observe cancellation.
 		select {
 		case <-done:
+			return errTaskTimeout
 		case <-time.After(stopGrace):
 			log.Errorf("Task %s execution did not stop after cancellation", t.Name)
+			return errTaskTimeoutStuck
 		}
-		return errTaskTimeout
 	}
 }
 

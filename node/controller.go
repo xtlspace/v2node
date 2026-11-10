@@ -21,6 +21,7 @@ type Controller struct {
 	limiter                 *limiter.Limiter
 	userList                []panel.UserInfo
 	aliveMap                map[int]int
+	prefetched              bool
 	conf                    *conf.NodeConfig
 	info                    *panel.NodeInfo
 	nodeInfoMonitorPeriodic *task.Task
@@ -54,17 +55,20 @@ func (c *Controller) Start(x *core.V2Core) error {
 		}
 		node = c.info
 	}
-	// Update user
-	c.userList, err = c.apiClient.GetUserList(context.Background())
-	if err != nil {
-		return fmt.Errorf("get user list error: %s", err)
+	// Use panel data prefetched by node.New when available. This keeps reload
+	// independent from the panel after the old service has been stopped.
+	if !c.prefetched {
+		c.userList, err = c.apiClient.GetUserList(context.Background())
+		if err != nil {
+			return fmt.Errorf("get user list error: %s", err)
+		}
+		c.aliveMap, err = c.apiClient.GetUserAlive(context.Background())
+		if err != nil {
+			return fmt.Errorf("failed to get user alive list: %s", err)
+		}
 	}
 	if len(c.userList) == 0 {
 		return errors.New("add users error: not have any user")
-	}
-	c.aliveMap, err = c.apiClient.GetUserAlive(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to get user alive list: %s", err)
 	}
 	c.tag = node.Tag
 

@@ -24,13 +24,33 @@ func TestExecuteWithTimeoutSignalsReload(t *testing.T) {
 	}
 
 	err := task.ExecuteWithTimeout()
-	if !errors.Is(err, errTaskTimeout) {
-		t.Fatalf("ExecuteWithTimeout() = %v, want errTaskTimeout", err)
+	if !errors.Is(err, errTaskTimeoutStuck) {
+		t.Fatalf("ExecuteWithTimeout() = %v, want errTaskTimeoutStuck", err)
 	}
 	select {
 	case <-reload:
 	default:
 		t.Fatal("expected reload signal")
+	}
+}
+
+func TestExecuteWithTimeoutResponsive(t *testing.T) {
+	old := stopGrace
+	stopGrace = 200 * time.Millisecond
+	defer func() { stopGrace = old }()
+
+	task := &Task{
+		Name:     "responsive-timeout",
+		Interval: 10 * time.Millisecond,
+		Execute: func(ctx context.Context) error {
+			<-ctx.Done()
+			time.Sleep(10 * time.Millisecond)
+			return nil
+		},
+	}
+
+	if err := task.ExecuteWithTimeout(); !errors.Is(err, errTaskTimeout) {
+		t.Fatalf("ExecuteWithTimeout() = %v, want errTaskTimeout", err)
 	}
 }
 

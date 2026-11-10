@@ -28,6 +28,12 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 
 	snapshot := c.server.GetUserTrafficSnapshot(c.tag)
 	reportTraffic := filterReportTraffic(snapshot, reportmin)
+
+	// Take the online snapshot before any panel request. This also cleans up
+	// states whose connections have already closed, so a stuck traffic report
+	// cannot make UserOnlineIP grow during a panel outage.
+	onlineDevice, reportedStates := c.limiter.GetOnlineDevice(devicemin)
+
 	if len(reportTraffic) > 0 {
 		err = c.apiClient.ReportUserTraffic(ctx, toPanelTraffic(reportTraffic))
 
@@ -49,7 +55,6 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 		}
 	}
 
-	onlineDevice, reportedStates := c.limiter.GetOnlineDevice(devicemin)
 	if len(onlineDevice) > 0 {
 		data := make(map[int][]string)
 		for _, onlineuser := range onlineDevice {
