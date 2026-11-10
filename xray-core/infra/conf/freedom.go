@@ -183,8 +183,12 @@ func (c *FreedomConfig) Build() (proto.Message, error) {
 		}
 	}
 
-	if c.ProxyProtocol > 0 && c.ProxyProtocol <= 2 {
-		config.ProxyProtocol = c.ProxyProtocol
+	switch c.ProxyProtocol {
+	case 0:
+	case 2:
+		config.ProxyProtocol = 2
+	default:
+		return nil, errors.New("only PROXY protocol v2 is supported")
 	}
 
 	for _, r := range c.FinalRules {

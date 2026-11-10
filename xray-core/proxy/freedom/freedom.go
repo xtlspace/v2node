@@ -386,14 +386,13 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		}
 	}
 
-	if h.config.ProxyProtocol > 0 && h.config.ProxyProtocol <= 2 {
-		version := byte(h.config.ProxyProtocol)
+	if h.config.ProxyProtocol == 2 {
 		srcAddr := inbound.Source.RawNetAddr()
 		dstAddr := conn.RemoteAddr()
-		header := proxyproto.HeaderProxyFromAddrs(version, srcAddr, dstAddr)
+		header := proxyproto.HeaderProxyFromAddrs(2, srcAddr, dstAddr)
 		if _, err = header.WriteTo(conn); err != nil {
 			conn.Close()
-			return errors.New("failed to set PROXY protocol v", version).Base(err)
+			return errors.New("failed to set PROXY protocol v2").Base(err)
 		}
 	}
 	defer conn.Close()

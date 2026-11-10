@@ -12,6 +12,7 @@ import (
 	"github.com/pires/go-proxyproto"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/transport/internet/proxyprotocol"
 )
 
 var effectiveListener = DefaultListener{}
@@ -172,7 +173,16 @@ func (dl *DefaultListener) Listen(ctx context.Context, addr net.Addr, sockopt *S
 		// connections that connect directly. The header is used when present;
 		// otherwise the real peer address is kept.
 		policyFunc := func(upstream net.Addr) (proxyproto.Policy, error) { return proxyproto.USE, nil }
-		l = &proxyproto.Listener{Listener: l, Policy: policyFunc}
+		l = &proxyproto.Listener{
+			Listener: l,
+			Policy:   policyFunc,
+			ValidateHeader: func(header *proxyproto.Header) error {
+				if header.Version != 2 {
+					return errors.New("only PROXY protocol v2 is supported")
+				}
+				return nil
+			},
+		}
 	}
 	return l, err
 }
@@ -182,7 +192,14 @@ func (dl *DefaultListener) ListenPacket(ctx context.Context, addr net.Addr, sock
 
 	lc.Control = getControlFunc(ctx, sockopt, dl.controllers)
 
-	return lc.ListenPacket(ctx, addr.Network(), addr.String())
+	pc, err := lc.ListenPacket(ctx, addr.Network(), addr.String())
+	if err != nil {
+		return nil, err
+	}
+	if sockopt != nil && sockopt.AcceptProxyProtocol {
+		pc = proxyprotocol.Wrap(pc)
+	}
+	return pc, nil
 }
 
 // RegisterListenerController adds a controller to the effective system listener.
