@@ -16,10 +16,16 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # GOAMD64 microarchitecture levels:
+      #   v1 = baseline x86-64 (SSE2), runs on every amd64 CPU
+      #   v2 = SSE4.2, POPCNT
+      #   v3 = AVX2, BMI1/BMI2, FMA
       matrix:
         include:
+          - goamd64: v1
+            artifact: v2node-linux-amd64-v1
           - goamd64: v2
-            artifact: v2node-linux-amd64
+            artifact: v2node-linux-amd64-v2
           - goamd64: v3
             artifact: v2node-linux-amd64-v3
     env:
@@ -76,5 +82,6 @@ jobs:
           name: ${{ inputs.version }}
           target_commitish: ${{ github.sha }}
           files: |
-            build_assets/v2node-linux-amd64
+            build_assets/v2node-linux-amd64-v1
+            build_assets/v2node-linux-amd64-v2
             build_assets/v2node-linux-amd64-v3
