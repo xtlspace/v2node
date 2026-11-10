@@ -14,7 +14,6 @@ import (
 	"github.com/wyx2685/v2node/common/rate"
 	"github.com/wyx2685/v2node/limiter"
 
-	"github.com/xtls/xray-core/app/dispatcher"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
@@ -42,23 +41,6 @@ func sourceAddr(inbound *session.Inbound) netip.Addr {
 	addr, _ := netip.AddrFromSlice(inbound.Source.Address.IP())
 	return addr
 }
-
-// dualCounter updates both the user-level traffic counter and the per-device
-// traffic counter for the current reporting interval.
-type dualCounter struct {
-	user stats.Counter
-	ip   *atomic.Int64
-}
-
-func (c *dualCounter) Add(delta int64) int64 {
-	previous := c.user.Add(delta)
-	c.ip.Add(delta)
-	return previous
-}
-
-func (c *dualCounter) Value() int64 { return c.user.Value() }
-
-func (c *dualCounter) Set(value int64) int64 { return c.user.Set(value) }
 
 type cachedReader struct {
 	sync.Mutex
@@ -173,6 +155,17 @@ func (*DefaultDispatcher) Start() error {
 // Close implements common.Closable.
 func (*DefaultDispatcher) Close() error { return nil }
 
+// FlushTraffic commits counters buffered by active connections before a
+// traffic snapshot is taken.
+func (d *DefaultDispatcher) FlushTraffic() {
+	d.LinkManagers.Range(func(_, value interface{}) bool {
+		if lm, ok := value.(*LinkManager); ok {
+			lm.Flush()
+		}
+		return true
+	})
+}
+
 func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *transport.Link, *limiter.Limiter, error) {
 	opt := pipe.OptionsFromContext(ctx)
 	uplinkReader, uplinkWriter := pipe.New(opt...)
@@ -247,19 +240,21 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		}
 
 		ts := t.GetCounter(user.Email)
-		managedWriter.userCounter = &ts.UpStats
+		managedWriter.userCounter = &ts.UpCounter
 		if ipState != nil {
 			managedWriter.ipCounter = &ipState.Up
 		}
-		downcounter := &ts.DownStats
-		var down stats.Counter = downcounter
+		var ipDown *atomic.Int64
 		if ipState != nil {
-			down = &dualCounter{user: downcounter, ip: &ipState.Down}
+			ipDown = &ipState.Down
 		}
-		outboundLink.Writer = &dispatcher.SizeStatWriter{
-			Counter: down,
-			Writer:  outboundLink.Writer,
+		tw := &trafficWriter{
+			user:   &ts.DownCounter,
+			ip:     ipDown,
+			writer: outboundLink.Writer,
 		}
+		managedWriter.peer = tw
+		outboundLink.Writer = tw
 	}
 
 	return inboundLink, outboundLink, limit, nil
@@ -442,7 +437,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		}
 
 		ts := t.GetCounter(user.Email)
-		managedWriter.userCounter = &ts.DownStats
+		managedWriter.userCounter = &ts.DownCounter
 		if ipState != nil {
 			managedWriter.ipCounter = &ipState.Down
 		}

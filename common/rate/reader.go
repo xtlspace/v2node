@@ -3,6 +3,7 @@ package rate
 import (
 	"time"
 
+	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 )
 
@@ -37,4 +38,18 @@ func (r *Reader) wait(mb buf.MultiBuffer) {
 	if limiter := r.limiter.Get(); limiter != nil {
 		limiter.Wait(int64(mb.Len()))
 	}
+}
+
+func (r *Reader) Flush() {
+	if f, ok := r.reader.(interface{ Flush() }); ok {
+		f.Flush()
+	}
+}
+
+func (r *Reader) Interrupt() {
+	common.Interrupt(r.reader)
+}
+
+func (r *Reader) Close() error {
+	return common.Close(r.reader)
 }

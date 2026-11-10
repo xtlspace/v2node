@@ -99,6 +99,7 @@ func (vc *V2Core) GetUserTrafficSnapshot(tag string) []UserTrafficSnapshot {
 	if vc.dispatcher == nil {
 		return nil
 	}
+	vc.dispatcher.FlushTraffic()
 	v, ok := vc.dispatcher.Counter.Load(tag)
 	if !ok {
 		return nil

@@ -6,30 +6,62 @@ import (
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
-	"github.com/xtls/xray-core/features/stats"
 )
 
 type ManagedWriter struct {
 	writer      buf.Writer
 	manager     *LinkManager
-	userCounter stats.Counter
+	userCounter *atomic.Int64
 	ipCounter   *atomic.Int64
+	pending     atomic.Int64
+	peer        *trafficWriter
 }
 
 func (w *ManagedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
-	n := int64(mb.Len())
+	if n := int64(mb.Len()); n > 0 {
+		if w.pending.Add(n) >= trafficFlushThreshold {
+			w.flush()
+		}
+	}
+	return w.writer.WriteMultiBuffer(mb)
+}
+
+func (w *ManagedWriter) flush() {
+	n := w.pending.Swap(0)
+	if n == 0 {
+		return
+	}
 	if w.userCounter != nil {
 		w.userCounter.Add(n)
 	}
 	if w.ipCounter != nil {
 		w.ipCounter.Add(n)
 	}
-	return w.writer.WriteMultiBuffer(mb)
+}
+
+// Flush commits locally buffered counters. It is called before traffic
+// snapshots so that bytes not yet reaching the flush threshold are not lost.
+func (w *ManagedWriter) Flush() {
+	w.flush()
+	if w.peer != nil {
+		w.peer.flush()
+	}
 }
 
 func (w *ManagedWriter) Close() error {
-	w.manager.RemoveWriter(w)
+	w.Flush()
+	if w.manager != nil {
+		w.manager.RemoveWriter(w)
+	}
 	return common.Close(w.writer)
+}
+
+func (w *ManagedWriter) Interrupt() {
+	w.Flush()
+	if w.manager != nil {
+		w.manager.RemoveWriter(w)
+	}
+	common.Interrupt(w.writer)
 }
 
 type LinkManager struct {
@@ -67,7 +99,19 @@ func (m *LinkManager) CloseAll() {
 	m.mu.Unlock()
 
 	for w, r := range links {
-		common.Close(w.writer)
+		common.Close(w)
 		common.Interrupt(r)
+	}
+}
+
+// Flush commits buffered counters for every active link.
+func (m *LinkManager) Flush() {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for w, r := range m.links {
+		w.Flush()
+		if f, ok := r.(interface{ Flush() }); ok {
+			f.Flush()
+		}
 	}
 }
