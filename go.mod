@@ -1,6 +1,6 @@
 module github.com/wyx2685/v2node
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/go-acme/lego/v4 v4.35.2
