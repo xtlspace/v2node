@@ -362,6 +362,37 @@ func TestReuseClearsDeadAt(t *testing.T) {
 	}
 }
 
+// TestDeleteUserKeepsDeviceState guards against detaching an online set while a
+// connection is being established: the state would then never be cleaned up.
+func TestDeleteUserKeepsDeviceState(t *testing.T) {
+	Init()
+	l := AddLimiter("vless", "node-del", 0, []panel.UserInfo{{
+		Id: 1, Uuid: "uuid-del", DeviceLimit: 10,
+	}}, map[int]int{1: 0})
+	defer DeleteLimiter("node-del")
+
+	tag := format.UserTag("node-del", "uuid-del")
+	_, state, reject := l.CheckLimit(tag, netip.MustParseAddr("1.2.3.4"), true)
+	if reject || state == nil {
+		t.Fatalf("check limit: reject=%v state=%v", reject, state)
+	}
+
+	l.UpdateUser("node-del", nil, []panel.UserInfo{{Id: 1, Uuid: "uuid-del"}}, nil)
+
+	if _, ok := l.UserOnlineIP.Load(tag); !ok {
+		t.Fatal("online set must stay so the state can be cleaned normally")
+	}
+	if _, _, reject := l.CheckLimit(tag, netip.MustParseAddr("5.6.7.8"), true); !reject {
+		t.Fatal("deleted user must be rejected for new connections")
+	}
+
+	state.Release()
+	online, _ := l.GetOnlineDevice(0)
+	if len(online) != 0 {
+		t.Fatalf("online devices after release = %d, want 0", len(online))
+	}
+}
+
 func BenchmarkCheckLimit(b *testing.B) {
 	Init()
 	l := AddLimiter("vless", "node-bench", 0, []panel.UserInfo{{

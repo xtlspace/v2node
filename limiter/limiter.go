@@ -129,7 +129,10 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 	for i := range deleted {
 		taguuid := format.UserTag(tag, deleted[i].Uuid)
 		l.deleteUserLimit(taguuid)
-		l.UserOnlineIP.Delete(taguuid)
+		// The online device set is deliberately kept: a connection may have
+		// obtained it right before this call, and detaching it would strand
+		// that state outside GetOnlineDevice. Entries drain through the normal
+		// reference-count cleanup instead.
 		l.SpeedLimiter.Delete(taguuid)
 		l.DeleteAlive(deleted[i].Id)
 	}
