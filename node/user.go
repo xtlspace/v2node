@@ -49,14 +49,10 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 		}
 	}
 
-	if onlineDevice, err := c.limiter.GetOnlineDevice(devicemin); err != nil {
-		log.WithFields(log.Fields{
-			"tag": c.tag,
-			"err": err,
-		}).Info("Get online device failed")
-	} else if len(*onlineDevice) > 0 {
+	onlineDevice, reportedStates := c.limiter.GetOnlineDevice(devicemin)
+	if len(onlineDevice) > 0 {
 		data := make(map[int][]string)
-		for _, onlineuser := range *onlineDevice {
+		for _, onlineuser := range onlineDevice {
 			// json structure: { UID1:["ip1","ip2"],UID2:["ip3","ip4"] }
 			data[onlineuser.UID] = append(data[onlineuser.UID], onlineuser.IP)
 		}
@@ -70,9 +66,11 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return err
 				}
+			} else {
+				c.limiter.ResetOnlineTraffic(reportedStates)
 			}
 		}
-		log.WithField("tag", c.tag).Infof("Total %d online users", len(*onlineDevice))
+		log.WithField("tag", c.tag).Infof("Total %d online users", len(onlineDevice))
 	}
 
 	return nil

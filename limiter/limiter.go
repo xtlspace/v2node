@@ -22,7 +22,7 @@ func Init() {
 type Limiter struct {
 	Nodetype      string      // Node type, e.g. "vless", "shadowsocks"
 	SpeedLimit    int         // Node speed limit in Mbps, 0 means unlimited
-	UserOnlineIP  *sync.Map   // Key: TagUUID, value: *sync.Map {Key: normalized IP, value: *IPState}
+	UserOnlineIP  *sync.Map   // Key: TagUUID, value: *onlineSet
 	OldUserOnline *sync.Map   // Key: normalized IP, value: Uid
 	UserLimitInfo *sync.Map   // Key: TagUUID value: UserLimitInfo
 	SpeedLimiter  *sync.Map   // key: TagUUID, value: *DynamicBucket
@@ -30,6 +30,12 @@ type Limiter struct {
 	aliveLock     sync.RWMutex
 	oldOnlineLock sync.RWMutex
 	userLimitLock sync.Mutex
+}
+
+// onlineSet groups the active device states of one user (tag+uuid).
+type onlineSet struct {
+	mu  sync.Mutex
+	ips map[netip.Addr]*IPState
 }
 
 type UserLimitInfo struct {
@@ -46,6 +52,20 @@ type IPState struct {
 	UID  int
 	Up   atomic.Int64
 	Down atomic.Int64
+
+	refs    atomic.Int32
+	owner   *Limiter
+	tagUUID string
+	ip      netip.Addr
+}
+
+// Release drops one connection reference. The state is kept until the next
+// online-device snapshot, so the last reader/counter flush can still land.
+func (s *IPState) Release() {
+	if s == nil || s.owner == nil {
+		return
+	}
+	s.owner.releaseIPState(s)
 }
 
 func AddLimiter(nodetype string, tag string, speedLimit int, users []panel.UserInfo, aliveList map[int]int) *Limiter {
@@ -290,9 +310,10 @@ func (l *Limiter) consumeOldOnline(ip netip.Addr, uid int) bool {
 	if !ok {
 		return false
 	}
-	if v.(int) == uid {
-		l.OldUserOnline.Delete(ip)
+	if v.(int) != uid {
+		return false
 	}
+	l.OldUserOnline.Delete(ip)
 	return true
 }
 
@@ -302,64 +323,109 @@ func (l *Limiter) setOldOnline(next *sync.Map) {
 	l.oldOnlineLock.Unlock()
 }
 
-func (l *Limiter) trackOnlineIP(taguuid string, ip netip.Addr, uid, deviceLimit, aliveIp int) (*IPState, bool) {
-	if v, loaded := l.UserOnlineIP.Load(taguuid); loaded {
-		return l.addOnlineIP(v.(*sync.Map), ip, uid, deviceLimit, aliveIp)
+func (l *Limiter) getOrCreateOnlineSet(taguuid string) *onlineSet {
+	if v, ok := l.UserOnlineIP.Load(taguuid); ok {
+		return v.(*onlineSet)
 	}
-	ipMap := new(sync.Map)
-	state := &IPState{UID: uid}
-	ipMap.Store(ip, state)
-	if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, ipMap); loaded {
-		return l.addOnlineIP(v.(*sync.Map), ip, uid, deviceLimit, aliveIp)
+	set := &onlineSet{ips: make(map[netip.Addr]*IPState)}
+	if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, set); loaded {
+		return v.(*onlineSet)
 	}
-	if !l.consumeOldOnline(ip, uid) && deviceLimit > 0 && deviceLimit <= aliveIp {
-		l.UserOnlineIP.Delete(taguuid)
-		return nil, true
-	}
-	return state, false
+	return set
 }
 
-// addOnlineIP records a new IP for the user and reports whether the connection
-// should be rejected by the device limit.
-func (l *Limiter) addOnlineIP(ipMap *sync.Map, ip netip.Addr, uid, deviceLimit, aliveIp int) (*IPState, bool) {
-	if v, ok := ipMap.Load(ip); ok {
-		return v.(*IPState), false
+func (l *Limiter) trackOnlineIP(taguuid string, ip netip.Addr, uid, deviceLimit, aliveIp int) (*IPState, bool) {
+	set := l.getOrCreateOnlineSet(taguuid)
+
+	set.mu.Lock()
+	defer set.mu.Unlock()
+
+	if state, ok := set.ips[ip]; ok {
+		state.refs.Add(1)
+		return state, false
 	}
-	state := &IPState{UID: uid}
-	if v, loaded := ipMap.LoadOrStore(ip, state); loaded {
-		return v.(*IPState), false
+
+	state := &IPState{
+		UID:     uid,
+		owner:   l,
+		tagUUID: taguuid,
+		ip:      ip,
 	}
+	state.refs.Store(1)
+	set.ips[ip] = state
+
 	if l.consumeOldOnline(ip, uid) {
 		return state, false
 	}
 	if deviceLimit > 0 && deviceLimit <= aliveIp {
-		ipMap.Delete(ip)
+		delete(set.ips, ip)
 		return nil, true
 	}
 	return state, false
 }
 
-func (l *Limiter) GetOnlineDevice(minTrafficKB int) (*[]panel.OnlineUser, error) {
+func (l *Limiter) releaseIPState(state *IPState) {
+	if state == nil {
+		return
+	}
+	v, ok := l.UserOnlineIP.Load(state.tagUUID)
+	if !ok {
+		return
+	}
+	set, ok := v.(*onlineSet)
+	if !ok {
+		return
+	}
+
+	set.mu.Lock()
+	defer set.mu.Unlock()
+
+	if n := state.refs.Add(-1); n < 0 {
+		state.refs.Store(0)
+	}
+}
+
+// GetOnlineDevice returns a non-destructive snapshot of the online devices.
+// States that no longer have any connection reference are removed during the
+// scan. The returned states are the ones included in the report and can be
+// reset after the panel accepts it.
+func (l *Limiter) GetOnlineDevice(minTrafficKB int) ([]panel.OnlineUser, []*IPState) {
 	var onlineUser []panel.OnlineUser
+	var reported []*IPState
 	minBytes := int64(minTrafficKB) * 1000
 	next := new(sync.Map)
-	l.UserOnlineIP.Range(func(key, value interface{}) bool {
-		taguuid := key.(string)
-		ipMap := value.(*sync.Map)
-		ipMap.Range(func(key, value interface{}) bool {
-			ip := key.(netip.Addr)
-			state := value.(*IPState)
+
+	l.UserOnlineIP.Range(func(_, value interface{}) bool {
+		set := value.(*onlineSet)
+
+		set.mu.Lock()
+		for ip, state := range set.ips {
+			if state.refs.Load() == 0 {
+				delete(set.ips, ip)
+				continue
+			}
+
 			next.Store(ip, state.UID)
+
 			if minTrafficKB > 0 && state.Up.Load()+state.Down.Load() < minBytes {
-				return true
+				continue
 			}
 			onlineUser = append(onlineUser, panel.OnlineUser{UID: state.UID, IP: ip.String()})
-			return true
-		})
-		l.UserOnlineIP.Delete(taguuid) // Reset online device
+			reported = append(reported, state)
+		}
+		set.mu.Unlock()
 		return true
 	})
 	l.setOldOnline(next)
 
-	return &onlineUser, nil
+	return onlineUser, reported
+}
+
+// ResetOnlineTraffic clears the per-device counters after a successful online
+// report. Devices below the reporting threshold keep accumulating.
+func (l *Limiter) ResetOnlineTraffic(states []*IPState) {
+	for _, state := range states {
+		state.Up.Swap(0)
+		state.Down.Swap(0)
+	}
 }

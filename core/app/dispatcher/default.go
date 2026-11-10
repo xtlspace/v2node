@@ -223,6 +223,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		managedWriter := &ManagedWriter{
 			writer:  uplinkWriter,
 			manager: lm,
+			ipState: ipState,
 		}
 		lm.AddLink(managedWriter, outboundLink.Reader)
 		inboundLink.Writer = managedWriter
@@ -422,6 +423,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		managedWriter := &ManagedWriter{
 			writer:  outbound.Writer,
 			manager: lm,
+			ipState: ipState,
 		}
 		outbound.Writer = managedWriter
 		if w != nil {

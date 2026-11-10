@@ -4,6 +4,7 @@ import (
 	sync "sync"
 	"sync/atomic"
 
+	"github.com/wyx2685/v2node/limiter"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 )
@@ -15,6 +16,8 @@ type ManagedWriter struct {
 	ipCounter   *atomic.Int64
 	pending     atomic.Int64
 	peer        *trafficWriter
+	ipState     *limiter.IPState
+	releaseOnce sync.Once
 }
 
 func (w *ManagedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
@@ -48,8 +51,17 @@ func (w *ManagedWriter) Flush() {
 	}
 }
 
+func (w *ManagedWriter) releaseIP() {
+	w.releaseOnce.Do(func() {
+		if w.ipState != nil {
+			w.ipState.Release()
+		}
+	})
+}
+
 func (w *ManagedWriter) Close() error {
 	w.Flush()
+	w.releaseIP()
 	if w.manager != nil {
 		w.manager.RemoveWriter(w)
 	}
@@ -58,6 +70,7 @@ func (w *ManagedWriter) Close() error {
 
 func (w *ManagedWriter) Interrupt() {
 	w.Flush()
+	w.releaseIP()
 	if w.manager != nil {
 		w.manager.RemoveWriter(w)
 	}
@@ -99,6 +112,11 @@ func (m *LinkManager) CloseAll() {
 	m.mu.Unlock()
 
 	for w, r := range links {
+		// Flush both directions before releasing the device reference.
+		w.Flush()
+		if f, ok := r.(interface{ Flush() }); ok {
+			f.Flush()
+		}
 		common.Close(w)
 		common.Interrupt(r)
 	}

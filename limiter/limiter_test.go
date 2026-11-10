@@ -115,18 +115,19 @@ func TestCheckLimitAggregatesIPv6By64(t *testing.T) {
 	}
 
 	state1.Up.Add(600_000)
-	online, _ := l.GetOnlineDevice(500)
-	if len(*online) != 1 {
-		t.Fatalf("online devices = %d, want 1", len(*online))
+	online, reported := l.GetOnlineDevice(500)
+	if len(online) != 1 {
+		t.Fatalf("online devices = %d, want 1", len(online))
 	}
-	if (*online)[0].IP != "2001:db8:1:2::" {
-		t.Fatalf("reported IP = %q, want masked /64", (*online)[0].IP)
+	if online[0].IP != "2001:db8:1:2::" {
+		t.Fatalf("reported IP = %q, want masked /64", online[0].IP)
 	}
 
-	// The per-IP counters are reset when the interval is reported.
+	// The per-IP counters are reset after a successful report.
+	l.ResetOnlineTraffic(reported)
 	online, _ = l.GetOnlineDevice(500)
-	if len(*online) != 0 {
-		t.Fatalf("online devices after reset = %d, want 0", len(*online))
+	if len(online) != 0 {
+		t.Fatalf("online devices after reset = %d, want 0", len(online))
 	}
 }
 
@@ -147,11 +148,11 @@ func TestGetOnlineDeviceFiltersByPerIPTraffic(t *testing.T) {
 	low.Up.Add(50_000)
 
 	online, _ := l.GetOnlineDevice(500)
-	if len(*online) != 1 {
-		t.Fatalf("online devices = %d, want 1", len(*online))
+	if len(online) != 1 {
+		t.Fatalf("online devices = %d, want 1", len(online))
 	}
-	if (*online)[0].IP != "1.2.3.4" {
-		t.Fatalf("reported IP = %q, want 1.2.3.4", (*online)[0].IP)
+	if online[0].IP != "1.2.3.4" {
+		t.Fatalf("reported IP = %q, want 1.2.3.4", online[0].IP)
 	}
 }
 
@@ -171,7 +172,81 @@ func TestGetOnlineDeviceWithoutFilter(t *testing.T) {
 	}
 
 	online, _ := l.GetOnlineDevice(0)
-	if len(*online) != 2 {
-		t.Fatalf("online devices = %d, want 2", len(*online))
+	if len(online) != 2 {
+		t.Fatalf("online devices = %d, want 2", len(online))
+	}
+}
+
+func TestGetOnlineDeviceKeepsLongConnection(t *testing.T) {
+	Init()
+	l := AddLimiter("vless", "node-long", 0, []panel.UserInfo{{
+		Id: 1, Uuid: "uuid-long", DeviceLimit: 10,
+	}}, map[int]int{1: 0})
+	defer DeleteLimiter("node-long")
+
+	tag := format.UserTag("node-long", "uuid-long")
+	_, state, reject := l.CheckLimit(tag, netip.MustParseAddr("1.2.3.4"), true)
+	if reject || state == nil {
+		t.Fatalf("check limit: reject=%v state=%v", reject, state)
+	}
+
+	online, reported := l.GetOnlineDevice(0)
+	if len(online) != 1 {
+		t.Fatalf("first report = %d, want 1", len(online))
+	}
+	l.ResetOnlineTraffic(reported)
+
+	online, _ = l.GetOnlineDevice(0)
+	if len(online) != 1 {
+		t.Fatalf("second report = %d, want 1", len(online))
+	}
+
+	state.Release()
+	online, _ = l.GetOnlineDevice(0)
+	if len(online) != 0 {
+		t.Fatalf("after release = %d, want 0", len(online))
+	}
+}
+
+func TestReleaseMultipleConnections(t *testing.T) {
+	Init()
+	l := AddLimiter("vless", "node-multi", 0, []panel.UserInfo{{
+		Id: 1, Uuid: "uuid-multi", DeviceLimit: 10,
+	}}, map[int]int{1: 0})
+	defer DeleteLimiter("node-multi")
+
+	tag := format.UserTag("node-multi", "uuid-multi")
+	_, state1, _ := l.CheckLimit(tag, netip.MustParseAddr("1.2.3.4"), true)
+	_, state2, _ := l.CheckLimit(tag, netip.MustParseAddr("1.2.3.4"), true)
+	if state1 != state2 {
+		t.Fatal("same IP must share one IPState")
+	}
+
+	state1.Release()
+	online, _ := l.GetOnlineDevice(0)
+	if len(online) != 1 {
+		t.Fatalf("after one release = %d, want 1", len(online))
+	}
+
+	state2.Release()
+	online, _ = l.GetOnlineDevice(0)
+	if len(online) != 0 {
+		t.Fatalf("after both releases = %d, want 0", len(online))
+	}
+}
+
+func TestConsumeOldOnlineRejectsDifferentUID(t *testing.T) {
+	Init()
+	l := AddLimiter("vless", "node-old", 0, nil, map[int]int{1: 0})
+	defer DeleteLimiter("node-old")
+
+	ip := netip.MustParseAddr("1.2.3.4")
+	l.OldUserOnline.Store(ip, 1)
+
+	if l.consumeOldOnline(ip, 2) {
+		t.Fatal("different UID must not consume the old online entry")
+	}
+	if !l.consumeOldOnline(ip, 1) {
+		t.Fatal("same UID should consume the old online entry")
 	}
 }
