@@ -10,6 +10,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -144,6 +145,10 @@ func (c *Client) ReportUserTraffic(ctx context.Context, userTraffic []UserTraffi
 		SetContext(ctx).
 		SetBody(data).
 		ForceContentType("application/json").
+		// The push endpoint adds to the user counters, so a retry after a
+		// timed-out response would bill the same traffic twice. Disable
+		// resty's default retry for this request only.
+		AddRetryCondition(func(*resty.Response, error) bool { return false }).
 		Post(path)
 	if err != nil {
 		return err
