@@ -3,7 +3,9 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -11,6 +13,11 @@ import (
 )
 
 const minTaskInterval = time.Second
+
+// maxTaskPanics bounds how many consecutive panics a task tolerates before it
+// stops itself. The node keeps forwarding traffic; the task resumes after a
+// reload or restart.
+const maxTaskPanics = 3
 
 // stopGrace bounds how long a timed-out execution or Close waits for the
 // execution goroutine to return after cancellation. It is a variable so tests
@@ -20,6 +27,7 @@ var stopGrace = 5 * time.Second
 var (
 	errTaskTimeout      = errors.New("task execution timed out")
 	errTaskTimeoutStuck = errors.New("task execution did not stop after cancellation")
+	errTaskPanicLimit   = errors.New("task panicked repeatedly")
 )
 
 type Task struct {
@@ -33,6 +41,7 @@ type Task struct {
 	Stop       chan struct{}
 	done       chan struct{}
 	execCancel context.CancelFunc
+	panicCount int
 }
 
 func (t *Task) nextInterval() time.Duration {
@@ -81,6 +90,12 @@ func (t *Task) Start(first bool) error {
 				// The execution goroutine did not respond to cancellation.
 				// Do not start another execution on top of it.
 				log.Errorf("Task %s stopped after timeout", t.Name)
+				return false
+			}
+			if errors.Is(err, errTaskPanicLimit) {
+				// A panic is a code bug, not a transient error. Keep the node
+				// running but stop repeating the same failure every interval.
+				log.Errorf("Task %s stopped after repeated panics", t.Name)
 				return false
 			}
 			if errors.Is(err, errTaskTimeout) {
@@ -151,7 +166,28 @@ func (t *Task) ExecuteWithTimeout() error {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- t.Execute(ctx)
+		// A panic in Execute must not take the whole process down: it would
+		// drop every established connection and, for a deterministic input,
+		// turn the next restart into a crash loop.
+		defer func() {
+			if r := recover(); r != nil {
+				t.Access.Lock()
+				t.panicCount++
+				panics := t.panicCount
+				t.Access.Unlock()
+
+				if panics >= maxTaskPanics {
+					done <- fmt.Errorf("%w (%d consecutive): %v\n%s", errTaskPanicLimit, panics, r, debug.Stack())
+					return
+				}
+				done <- fmt.Errorf("task %s panicked (%d/%d): %v\n%s", t.Name, panics, maxTaskPanics, r, debug.Stack())
+			}
+		}()
+		err := t.Execute(ctx)
+		t.Access.Lock()
+		t.panicCount = 0
+		t.Access.Unlock()
+		done <- err
 	}()
 
 	select {
