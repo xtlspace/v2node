@@ -2,7 +2,9 @@ package panel
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"encoding/json/jsontext"
@@ -91,6 +93,11 @@ func (c *Client) GetUserList(ctx context.Context) ([]UserInfo, error) {
 	return userlist.Users, nil
 }
 
+// ErrAliveListUnsupported reports that the panel does not expose the alive
+// list endpoint. Older panels simply omit it, which must not prevent a node
+// from starting: the device limit is then driven by an empty alive list.
+var ErrAliveListUnsupported = errors.New("alive list endpoint not supported")
+
 // GetUserAlive will fetch the alive_ip count for users
 func (c *Client) GetUserAlive(ctx context.Context) (map[int]int, error) {
 	c.AliveMap = &AliveMap{}
@@ -104,6 +111,10 @@ func (c *Client) GetUserAlive(ctx context.Context) (map[int]int, error) {
 	}
 	if r == nil || r.RawResponse == nil {
 		return nil, fmt.Errorf("received nil response or raw response")
+	}
+	switch r.StatusCode() {
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return nil, ErrAliveListUnsupported
 	}
 	if r.StatusCode() >= 399 {
 		return nil, fmt.Errorf("alive list request failed with status %d", r.StatusCode())

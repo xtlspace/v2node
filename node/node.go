@@ -38,7 +38,7 @@ func New(nodes []conf.NodeConfig) (*Node, error) {
 			return nil, fmt.Errorf("node %s has no users", info.Tag)
 		}
 		alive, err := p.GetUserAlive(context.Background())
-		if err != nil {
+		if err != nil && !errors.Is(err, panel.ErrAliveListUnsupported) {
 			return nil, fmt.Errorf("get user alive list: %w", err)
 		}
 		controller := NewController(p, &node, info)

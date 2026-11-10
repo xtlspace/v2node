@@ -95,19 +95,28 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 	// get user alive
 	newA, err := c.apiClient.GetUserAlive(ctx)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, panel.ErrAliveListUnsupported) {
+			// Older panels omit this endpoint. Keep the last known alive list
+			// and only log the condition once.
+			if !c.aliveUnsupported {
+				c.aliveUnsupported = true
+				log.WithField("tag", c.tag).Warn("Panel does not support alive list, device limit keeps the last known value")
+			}
+		} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
+		} else {
+			log.WithFields(log.Fields{
+				"tag": c.tag,
+				"err": err,
+			}).Error("Get alive list failed")
+			return nil
 		}
-		log.WithFields(log.Fields{
-			"tag": c.tag,
-			"err": err,
-		}).Error("Get alive list failed")
-		return nil
-	}
-
-	// update alive list
-	if newA != nil {
-		c.limiter.SetAliveList(newA)
+	} else {
+		c.aliveUnsupported = false
+		// update alive list
+		if newA != nil {
+			c.limiter.SetAliveList(newA)
+		}
 	}
 	// node no changed, check users
 	if len(newU) == 0 {

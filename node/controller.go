@@ -22,6 +22,7 @@ type Controller struct {
 	userList                []panel.UserInfo
 	aliveMap                map[int]int
 	prefetched              bool
+	aliveUnsupported        bool
 	conf                    *conf.NodeConfig
 	info                    *panel.NodeInfo
 	nodeInfoMonitorPeriodic *task.Task
