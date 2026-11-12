@@ -40,7 +40,7 @@ func Wrap(pc net.PacketConn) net.PacketConn {
 	if udp, ok := pc.(*net.UDPConn); ok {
 		return newOOBConn(udp)
 	}
-	return &basicConn{PacketConn: pc}
+	return newBasicConn(pc)
 }
 
 type entry struct {
@@ -56,10 +56,8 @@ type base struct {
 	sweepAt atomic.Int64
 }
 
-func newBase() base {
-	b := base{}
+func (b *base) init() {
 	b.sweepAt.Store(time.Now().UnixNano())
-	return b
 }
 
 func (b *base) maybeSweep() {
@@ -81,7 +79,12 @@ func (b *base) maybeSweep() {
 		if e.lastSeen.Load() < cutoff {
 			b.forward.Delete(key)
 			if lk, ok := keyFromAddr(e.logical); ok {
-				b.reverse.Delete(lk)
+				// Only drop the reverse mapping if it still belongs to this
+				// entry. The same logical address may have been re-mapped to a
+				// newer transport after this entry went stale.
+				if cur, ok := b.reverse.Load(lk); ok && cur == e {
+					b.reverse.Delete(lk)
+				}
 			}
 		}
 		return true
@@ -262,7 +265,7 @@ type oobConn struct {
 func newOOBConn(udp *net.UDPConn) *oobConn {
 	c := &oobConn{}
 	c.UDPConn = udp
-	c.base = newBase()
+	c.base.init()
 	c.batch = ipv4.NewPacketConn(udp)
 	return c
 }
@@ -327,6 +330,22 @@ func (c *oobConn) ReadMsgUDP(b, oob []byte) (n, oobn, flags int, addr *net.UDPAd
 	}
 }
 
+// retainMessage moves the message at src to dst by swapping the two slots.
+//
+// quic-go allocates one OOB (control message) buffer per message slot once at
+// startup and never reassigns them. A plain struct copy (ms[dst] = ms[src])
+// duplicates the OOB slice, leaving two slots sharing one buffer; the next
+// recvmmsg call then overwrites one slot's control messages with the other's.
+// On a dual-stack socket the IPv4 and IPv6 cmsg chains have different lengths,
+// so the shared buffer fails to parse and quic-go closes the whole transport,
+// silently killing the listener until the process restarts.
+func retainMessage(ms []ipv4.Message, dst, src int) {
+	if dst == src {
+		return
+	}
+	ms[dst], ms[src] = ms[src], ms[dst]
+}
+
 func (c *oobConn) ReadBatch(ms []ipv4.Message, flags int) (int, error) {
 	for {
 		n, err := c.batch.ReadBatch(ms, flags)
@@ -356,7 +375,7 @@ func (c *oobConn) ReadBatch(ms []ipv4.Message, flags int) (int, error) {
 				} else {
 					c.recordIdentity(transport)
 				}
-				ms[out] = *m
+				retainMessage(ms, out, i)
 				out++
 				continue
 			}
@@ -370,7 +389,7 @@ func (c *oobConn) ReadBatch(ms []ipv4.Message, flags int) (int, error) {
 			if logical := c.record(m.Addr, src); logical != nil {
 				m.Addr = logical
 			}
-			ms[out] = *m
+			retainMessage(ms, out, i)
 			out++
 		}
 
@@ -401,7 +420,7 @@ type basicConn struct {
 
 func newBasicConn(pc net.PacketConn) *basicConn {
 	c := &basicConn{PacketConn: pc}
-	c.base = newBase()
+	c.base.init()
 	return c
 }
 

@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"golang.org/x/net/ipv4"
 )
 
 func buildV2(t *testing.T, src, dst netip.AddrPort) []byte {
@@ -207,5 +209,87 @@ func TestV1Dropped(t *testing.T) {
 	}
 	if !bytes.Equal(buf[:n], []byte("raw-udp")) {
 		t.Fatalf("payload = %q, want raw-udp", buf[:n])
+	}
+}
+
+// TestRetainMessageKeepsOOBUnique guards the batch compaction invariant: every
+// message slot must keep its own OOB buffer. quic-go allocates those buffers
+// once and parses control messages against them, so making two slots share one
+// buffer corrupts parsing (IPv4 and IPv6 cmsg chains differ in length on
+// dual-stack sockets) and makes quic-go tear down the whole transport.
+func TestRetainMessageKeepsOOBUnique(t *testing.T) {
+	ms := make([]ipv4.Message, 6)
+	for i := range ms {
+		ms[i].OOB = make([]byte, 128)
+		ms[i].N = i + 1
+	}
+
+	// Drop slots 1 and 4, keep 0, 2, 3, 5.
+	keep := []int{0, 2, 3, 5}
+	out := 0
+	for _, i := range keep {
+		retainMessage(ms, out, i)
+		out++
+	}
+	if out != len(keep) {
+		t.Fatalf("out = %d, want %d", out, len(keep))
+	}
+	for i, want := range keep {
+		if ms[i].N != want+1 {
+			t.Fatalf("slot %d holds message %d, want %d", i, ms[i].N-1, want)
+		}
+	}
+
+	seen := make(map[*byte]int, len(ms))
+	for i := range ms {
+		if len(ms[i].OOB) == 0 {
+			t.Fatalf("slot %d lost its OOB buffer", i)
+		}
+		key := &ms[i].OOB[0]
+		if prev, ok := seen[key]; ok {
+			t.Fatalf("slots %d and %d share one OOB buffer", prev, i)
+		}
+		seen[key] = i
+	}
+}
+
+// TestSweepKeepsRemappedReverse covers a client whose logical address is
+// re-mapped to a new transport: when the stale entry is swept, the live reverse
+// mapping must not be deleted.
+func TestSweepKeepsRemappedReverse(t *testing.T) {
+	var b base
+
+	logical := netip.MustParseAddrPort("1.2.3.4:1234")
+	staleTransport := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1111}
+	liveTransport := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 2222}
+
+	staleKey, ok := keyFromAddr(staleTransport)
+	if !ok {
+		t.Fatal("invalid stale transport")
+	}
+	liveKey, ok := keyFromAddr(liveTransport)
+	if !ok {
+		t.Fatal("invalid live transport")
+	}
+
+	stale := &entry{transport: staleTransport, logical: addrFromKey(logical)}
+	stale.lastSeen.Store(time.Now().Add(-2 * entryTTL).UnixNano())
+	live := &entry{transport: liveTransport, logical: addrFromKey(logical)}
+	live.lastSeen.Store(time.Now().UnixNano())
+
+	b.forward.Store(staleKey, stale)
+	b.forward.Store(liveKey, live)
+	b.reverse.Store(logical, live)
+
+	// Force the next operation to trigger a sweep.
+	b.ops.Store(sweepOps - 1)
+	b.maybeSweep()
+
+	if _, ok := b.forward.Load(staleKey); ok {
+		t.Fatal("stale forward entry was not swept")
+	}
+	got, ok := b.reverse.Load(logical)
+	if !ok || got != live {
+		t.Fatal("sweep deleted the live reverse mapping")
 	}
 }
