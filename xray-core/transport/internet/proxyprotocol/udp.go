@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"log"
 	"net"
 	"net/netip"
 	"sync"
@@ -50,14 +51,26 @@ type entry struct {
 }
 
 type base struct {
-	forward sync.Map // netip.AddrPort (transport) -> *entry
-	reverse sync.Map // netip.AddrPort (logical) -> *entry
-	ops     atomic.Uint64
-	sweepAt atomic.Int64
+	forward   sync.Map // netip.AddrPort (transport) -> *entry
+	reverse   sync.Map // netip.AddrPort (logical) -> *entry
+	ops       atomic.Uint64
+	sweepAt   atomic.Int64
+	writeMiss atomic.Uint64
 }
 
 func (b *base) init() {
 	b.sweepAt.Store(time.Now().UnixNano())
+}
+
+// dropWrite is called when a datagram cannot be routed to a known transport.
+// Writing it directly to the logical (client) address would bypass realm and
+// is always lost, so it is dropped here instead and counted. QUIC will
+// retransmit once a mapping exists again.
+func (b *base) dropWrite(addr net.Addr) {
+	n := b.writeMiss.Add(1)
+	if n == 1 || n%10000 == 0 {
+		log.Printf("[proxyprotocol] write miss #%d: no transport for %s, datagram dropped", n, addr)
+	}
 }
 
 func (b *base) maybeSweep() {
@@ -403,14 +416,16 @@ func (c *oobConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if transport := c.transportFor(addr); transport != nil {
 		return c.UDPConn.WriteTo(p, transport)
 	}
-	return c.UDPConn.WriteTo(p, addr)
+	c.dropWrite(addr)
+	return len(p), nil
 }
 
 func (c *oobConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
 	if transport := c.transportFor(addr); transport != nil {
 		return c.UDPConn.WriteMsgUDP(b, oob, transport)
 	}
-	return c.UDPConn.WriteMsgUDP(b, oob, addr)
+	c.dropWrite(addr)
+	return len(b), 0, nil
 }
 
 type basicConn struct {
@@ -461,7 +476,8 @@ func (c *basicConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if transport := c.transportFor(addr); transport != nil {
 		return c.PacketConn.WriteTo(p, transport)
 	}
-	return c.PacketConn.WriteTo(p, addr)
+	c.dropWrite(addr)
+	return len(p), nil
 }
 
 func (c *basicConn) SetReadBuffer(n int) error {

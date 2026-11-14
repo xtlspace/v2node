@@ -123,6 +123,7 @@ type udpPacketConn struct {
 	started      bool
 	user         *protocol.MemoryUser
 	lastActivity atomic.Int64
+	dropCount    atomic.Uint64
 }
 
 func newUDPPacketConn(ctx context.Context, quicConn *quic.Conn, udpStream bool, isServer bool, user *protocol.MemoryUser, onDestroy func()) *udpPacketConn {
@@ -269,6 +270,7 @@ func (c *udpPacketConn) inputPacket(message *udpMessage) {
 		select {
 		case c.data <- message:
 		default:
+			c.dropCount.Add(1)
 		}
 		return
 	}
@@ -279,6 +281,7 @@ func (c *udpPacketConn) inputPacket(message *udpMessage) {
 		select {
 		case c.data <- newMessage:
 		default:
+			c.dropCount.Add(1)
 		}
 	}
 }
@@ -330,6 +333,9 @@ func (c *udpPacketConn) Close() error {
 
 func (c *udpPacketConn) closeWithError(err error) {
 	c.cancel(err)
+	if dropped := c.dropCount.Load(); dropped > 0 {
+		errors.LogDebug(c.ctx, "TUIC UDP session ", c.sessionID, " dropped ", dropped, " packets (queue full)")
+	}
 	if !c.isServer {
 		buffer := bytes.NewBuffer(make([]byte, 0, 4))
 		buffer.WriteByte(tuicVersion)
