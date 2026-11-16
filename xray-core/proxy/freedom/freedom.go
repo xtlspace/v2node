@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"io"
+	stdnet "net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -389,6 +390,26 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 	if h.config.ProxyProtocol == 2 {
 		srcAddr := inbound.Source.RawNetAddr()
 		dstAddr := conn.RemoteAddr()
+		// go-proxyproto only emits a PROXY command when both addresses are the
+		// same concrete type (both TCP or both UDP); otherwise it emits a LOCAL
+		// header with no addresses. A TUIC/QUIC inbound reports a UDP source
+		// while the freedom outbound dials TCP, so coerce the source type. The
+		// IP/port are preserved: it carries either the real client IP (learned
+		// from the inbound PROXY header) or the observed inbound IP (no header).
+		switch dstAddr.(type) {
+		case *stdnet.TCPAddr:
+			if s, ok := srcAddr.(*stdnet.UDPAddr); ok {
+				srcAddr = &stdnet.TCPAddr{IP: s.IP, Port: s.Port, Zone: s.Zone}
+			}
+		case *stdnet.UDPAddr:
+			if s, ok := srcAddr.(*stdnet.TCPAddr); ok {
+				srcAddr = &stdnet.UDPAddr{IP: s.IP, Port: s.Port, Zone: s.Zone}
+			}
+		}
+		// IPv6 clients usually rotate privacy addresses within their /64.
+		// Mask the source to its /64 prefix so the forwarded header identifies
+		// the network, not a per-connection address. IPv4 is left untouched.
+		srcAddr = maskProxySourceIPv6(srcAddr)
 		header := proxyproto.HeaderProxyFromAddrs(2, srcAddr, dstAddr)
 		if _, err = header.WriteTo(conn); err != nil {
 			conn.Close()
@@ -481,6 +502,38 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 	}
 
 	return nil
+}
+
+// maskProxySourceIPv6 zeroes the low 64 bits of an IPv6 source address,
+// keeping only its /64 prefix. Non-IPv6 addresses are returned unchanged.
+func maskProxySourceIPv6(addr stdnet.Addr) stdnet.Addr {
+	switch a := addr.(type) {
+	case *stdnet.TCPAddr:
+		if v6, ok := ipv6Slash64(a.IP); ok {
+			return &stdnet.TCPAddr{IP: v6, Port: a.Port, Zone: a.Zone}
+		}
+	case *stdnet.UDPAddr:
+		if v6, ok := ipv6Slash64(a.IP); ok {
+			return &stdnet.UDPAddr{IP: v6, Port: a.Port, Zone: a.Zone}
+		}
+	}
+	return addr
+}
+
+func ipv6Slash64(ip stdnet.IP) (stdnet.IP, bool) {
+	if ip == nil || ip.To4() != nil { // nil, IPv4, or v4-mapped
+		return nil, false
+	}
+	v6 := ip.To16()
+	if v6 == nil {
+		return nil, false
+	}
+	masked := make(stdnet.IP, 16)
+	copy(masked, v6)
+	for i := 8; i < 16; i++ {
+		masked[i] = 0
+	}
+	return masked, true
 }
 
 func NewPacketReader(conn net.Conn, h *Handler, defaultRule *FinalRule, UDPOverride net.Destination, DialDest net.Destination) buf.Reader {
