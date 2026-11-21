@@ -1,9 +1,13 @@
 package panel
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	stdnet "net"
+	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -16,6 +20,7 @@ import (
 
 type Client struct {
 	client           *resty.Client
+	router           *transportRouter
 	APIHost          string
 	Token            string
 	NodeId           int
@@ -54,12 +59,50 @@ func New(c *conf.NodeConfig) (*Client, error) {
 		"node_id":   strconv.Itoa(c.NodeID),
 		"token":     c.Key,
 	})
+	// Route requests by method: GET stays direct (used to bootstrap before the
+	// core exists), POST can be dialed through the xray dispatcher once the
+	// core is up (installed by SetPostDialer).
+	router := &transportRouter{direct: http.DefaultTransport}
+	client.SetTransport(router)
 	return &Client{
 		client:   client,
+		router:   router,
 		Token:    c.Key,
 		APIHost:  c.APIHost,
 		NodeId:   c.NodeID,
 		UserList: &UserListBody{},
 		AliveMap: &AliveMap{},
 	}, nil
+}
+
+// transportRouter sends GET (and any non-POST) requests through the direct
+// transport, and POST requests through the xray dispatcher transport once it
+// has been installed.
+type transportRouter struct {
+	direct http.RoundTripper
+	post   atomic.Pointer[http.Transport]
+}
+
+func (t *transportRouter) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == http.MethodPost {
+		if tr := t.post.Load(); tr != nil {
+			return tr.RoundTrip(req)
+		}
+	}
+	return t.direct.RoundTrip(req)
+}
+
+// SetPostDialer installs the dialer used for POST requests (the xray
+// dispatcher). Passing nil is a no-op; until it is set, POST falls back to the
+// direct transport.
+func (c *Client) SetPostDialer(dial func(ctx context.Context, network, addr string) (stdnet.Conn, error)) {
+	if dial == nil {
+		return
+	}
+	c.router.post.Store(&http.Transport{
+		DialContext:       dial,
+		ForceAttemptHTTP2: false,
+		MaxIdleConns:      8,
+		IdleConnTimeout:   60 * time.Second,
+	})
 }

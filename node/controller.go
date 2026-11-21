@@ -46,6 +46,12 @@ func NewController(api *panel.Client, conf *conf.NodeConfig, info *panel.NodeInf
 func (c *Controller) Start(x *core.V2Core) error {
 	// Init Core
 	c.server = x
+	// Route the node's outgoing POST requests (traffic / online reports)
+	// through the xray dispatcher now that the core is up. GET requests stay
+	// direct.
+	if c.apiClient != nil {
+		c.apiClient.SetPostDialer(x.DialContext)
+	}
 	var err error
 	// First fetch Node Info
 	node := c.info
