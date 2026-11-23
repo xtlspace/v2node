@@ -75,9 +75,9 @@ func New(c *conf.NodeConfig) (*Client, error) {
 	}, nil
 }
 
-// transportRouter sends GET (and any non-POST) requests through the direct
-// transport, and POST requests through the xray dispatcher transport once it
-// has been installed.
+// transportRouter sends POST requests and the alive-list query (/alivelist)
+// through the xray dispatcher transport once it has been installed; all other
+// requests stay direct.
 type transportRouter struct {
 	direct http.RoundTripper
 	post   atomic.Pointer[http.Transport]
@@ -94,9 +94,9 @@ func (t *transportRouter) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.direct.RoundTrip(req)
 }
 
-// SetPostDialer installs the dialer used for POST requests (the xray
-// dispatcher). Passing nil is a no-op; until it is set, POST falls back to the
-// direct transport.
+// SetPostDialer installs the dialer used for the xray-dispatched requests
+// (POST and /alivelist). Passing nil is a no-op; until it is set, those
+// requests fall back to the direct transport.
 func (c *Client) SetPostDialer(dial func(ctx context.Context, network, addr string) (stdnet.Conn, error)) {
 	if dial == nil {
 		return

@@ -14,9 +14,9 @@ import (
 	"github.com/xtls/xray-core/transport"
 )
 
-// DialContext dials address through the xray dispatcher so that HTTP requests
-// issued by the node process itself are subject to the configured routing rules
-// and the default outbound.
+// DialContext dials address through the xray dispatcher. It is used for the
+// node's own control-plane requests that should follow the configured routing
+// rules and the default outbound (currently POST requests and /alivelist).
 func (v *V2Core) DialContext(ctx context.Context, network, address string) (stdnet.Conn, error) {
 	if v.dispatcher == nil {
 		return nil, errors.New("xray core not started")
@@ -42,8 +42,7 @@ type linkConn struct {
 	pr  *io.PipeReader // read side: Link.Reader -> pipe -> Read()
 	pw  *io.PipeWriter
 	pr2 *io.PipeReader // write side: Write() -> pipe -> Link.Writer
-	pw2   *io.PipeWriter
-	link   *transport.Link
+	pw2    *io.PipeWriter
 	remote xnet.Destination
 	cancel context.CancelFunc
 	once   sync.Once
@@ -52,7 +51,7 @@ type linkConn struct {
 func newLinkConn(link *transport.Link, remote xnet.Destination, cancel context.CancelFunc) *linkConn {
 	pr, pw := io.Pipe()
 	pr2, pw2 := io.Pipe()
-	c := &linkConn{pr: pr, pw: pw, pr2: pr2, pw2: pw2, link: link, remote: remote, cancel: cancel}
+	c := &linkConn{pr: pr, pw: pw, pr2: pr2, pw2: pw2, remote: remote, cancel: cancel}
 	go func() {
 		_ = buf.Copy(link.Reader, buf.NewWriter(pw))
 		pw.Close()
