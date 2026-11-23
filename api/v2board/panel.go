@@ -84,7 +84,9 @@ type transportRouter struct {
 }
 
 func (t *transportRouter) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Method == http.MethodPost {
+	// POST requests and the alive-list query are routed through the xray
+	// dispatcher (when installed); all other GETs stay direct.
+	if req.Method == http.MethodPost || req.URL.Path == "/api/v1/server/UniProxy/alivelist" {
 		if tr := t.post.Load(); tr != nil {
 			return tr.RoundTrip(req)
 		}
