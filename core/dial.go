@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"io"
 	stdnet "net"
 	"sync"
@@ -17,16 +18,20 @@ import (
 // issued by the node process itself are subject to the configured routing rules
 // and the default outbound.
 func (v *V2Core) DialContext(ctx context.Context, network, address string) (stdnet.Conn, error) {
+	if v.dispatcher == nil {
+		return nil, errors.New("xray core not started")
+	}
 	dest, err := xnet.ParseDestination(network + ":" + address)
 	if err != nil {
 		return nil, err
 	}
-	sctx := session.ContextWithOutbounds(ctx, []*session.Outbound{{}})
+	sctx, cancel := context.WithCancel(session.ContextWithOutbounds(ctx, []*session.Outbound{{}}))
 	link, err := v.dispatcher.Dispatch(sctx, dest)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	return newLinkConn(link, dest), nil
+	return newLinkConn(link, dest, cancel), nil
 }
 
 // linkConn adapts a transport.Link to net.Conn using a pair of io.Pipes.
@@ -37,16 +42,17 @@ type linkConn struct {
 	pr  *io.PipeReader // read side: Link.Reader -> pipe -> Read()
 	pw  *io.PipeWriter
 	pr2 *io.PipeReader // write side: Write() -> pipe -> Link.Writer
-	pw2 *io.PipeWriter
+	pw2   *io.PipeWriter
 	link   *transport.Link
 	remote xnet.Destination
+	cancel context.CancelFunc
 	once   sync.Once
 }
 
-func newLinkConn(link *transport.Link, remote xnet.Destination) *linkConn {
+func newLinkConn(link *transport.Link, remote xnet.Destination, cancel context.CancelFunc) *linkConn {
 	pr, pw := io.Pipe()
 	pr2, pw2 := io.Pipe()
-	c := &linkConn{pr: pr, pw: pw, pr2: pr2, pw2: pw2, link: link, remote: remote}
+	c := &linkConn{pr: pr, pw: pw, pr2: pr2, pw2: pw2, link: link, remote: remote, cancel: cancel}
 	go func() {
 		_ = buf.Copy(link.Reader, buf.NewWriter(pw))
 		pw.Close()
@@ -63,6 +69,11 @@ func (c *linkConn) Write(p []byte) (int, error) { return c.pw2.Write(p) }
 
 func (c *linkConn) Close() error {
 	c.once.Do(func() {
+		// Cancel the dispatcher context first so the link's reader/writer are
+		// torn down and the buf.Copy goroutines unblock instead of leaking.
+		if c.cancel != nil {
+			c.cancel()
+		}
 		c.pw.Close()
 		c.pr2.Close()
 		c.pr.Close()
